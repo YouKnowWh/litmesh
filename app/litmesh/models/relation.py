@@ -123,7 +123,6 @@ class BridgeRelationType(str, Enum):
 
 class BridgeStatus(str, Enum):
     CANDIDATE = "candidate"
-    REVIEWED = "reviewed"
     ACTIVE = "active"
     REJECTED = "rejected"
 

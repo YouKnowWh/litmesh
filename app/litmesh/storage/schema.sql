@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS corpora (
     domain TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     source_items TEXT NOT NULL DEFAULT '[]',          -- JSON array
-    default_graph_id TEXT,
     integration_policy TEXT NOT NULL DEFAULT 'bridge_review',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -63,7 +62,6 @@ CREATE TABLE IF NOT EXISTS paper_cards (
     keywords TEXT NOT NULL DEFAULT '[]',              -- JSON array
     research_type TEXT NOT NULL DEFAULT 'other',
     main_framework TEXT NOT NULL DEFAULT '',
-    domain_keys TEXT NOT NULL DEFAULT '[]',           -- JSON array
     raw_text_hash TEXT NOT NULL DEFAULT '',
     page_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -282,7 +280,6 @@ CREATE TABLE IF NOT EXISTS extraction_runs (
     rolled_back_at TEXT,
     rolled_back_by TEXT,
     error_message TEXT NOT NULL DEFAULT '',
-    notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (paper_id) REFERENCES paper_cards(paper_id),
     FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)

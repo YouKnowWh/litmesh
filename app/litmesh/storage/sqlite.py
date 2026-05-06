@@ -80,11 +80,11 @@ class LitMeshDB:
     def insert_corpus(self, corpus) -> str:
         self.conn.execute(
             """INSERT INTO corpora (corpus_id, name, corpus_type, domain, description,
-               source_items, default_graph_id, integration_policy)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               source_items, integration_policy)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (corpus.corpus_id, corpus.name, corpus.corpus_type.value, corpus.domain,
              corpus.description, _json_list(corpus.source_items),
-             corpus.default_graph_id, corpus.integration_policy.value)
+             corpus.integration_policy.value)
         )
         self.conn.commit()
         return corpus.corpus_id
@@ -115,13 +115,12 @@ class LitMeshDB:
         self.conn.execute(
             """INSERT INTO paper_cards (paper_id, graph_id, title, authors, year,
                source_file, abstract, abstract_summary, keywords, research_type,
-               main_framework, domain_keys, raw_text_hash, page_count)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               main_framework, raw_text_hash, page_count)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (paper.paper_id, paper.graph_id, paper.title, _json_list(paper.authors),
              paper.year, paper.source_file, paper.abstract, paper.abstract_summary,
              _json_list(paper.keywords), paper.research_type.value,
-             paper.main_framework, _json_list(paper.domain_keys),
-             paper.raw_text_hash, paper.page_count)
+             paper.main_framework, paper.raw_text_hash, paper.page_count)
         )
         self.conn.commit()
         return paper.paper_id

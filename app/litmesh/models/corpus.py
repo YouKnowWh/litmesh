@@ -39,7 +39,6 @@ class CorpusCard(BaseModel):
         default_factory=list,
         description="List of source file paths or identifiers in this corpus"
     )
-    default_graph_id: Optional[str] = Field(default=None, description="Primary SeriesGraph for this corpus")
     integration_policy: IntegrationPolicy = IntegrationPolicy.BRIDGE_REVIEW
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

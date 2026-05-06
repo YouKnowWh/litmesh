@@ -75,9 +75,7 @@ class ExtractionRun(BaseModel):
     rolled_back_at: Optional[datetime] = None
     rolled_back_by: Optional[str] = None
 
-    # Notes
     error_message: str = ""
-    notes: str = ""
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

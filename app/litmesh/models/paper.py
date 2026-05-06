@@ -43,10 +43,6 @@ class PaperCard(BaseModel):
         default="",
         description="Primary theoretical framework mentioned (e.g., PACADI, CPE-3DF)"
     )
-    domain_keys: list[str] = Field(
-        default_factory=list,
-        description="Concept keys as initial domain tags, not yet ConceptKey objects"
-    )
     # Internal bookkeeping
     raw_text_hash: str = Field(default="", description="SHA256 of the full extracted text")
     page_count: int = 0

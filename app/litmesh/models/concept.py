@@ -99,10 +99,5 @@ class ConceptKey(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-    @property
-    def full_key(self) -> str:
-        """Return namespace:label format, e.g. 'framework:CPE_3DF'"""
-        return f"{self.namespace.value}:{self.concept_key.split(':', 1)[-1]}" if ':' not in self.concept_key else self.concept_key
-
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}

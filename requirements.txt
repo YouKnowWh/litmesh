@@ -3,3 +3,6 @@ anthropic>=0.39.0
 pdfplumber>=0.10.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
+pytest>=8.0
+datasketch>=1.6.0
+httpx>=0.28.0

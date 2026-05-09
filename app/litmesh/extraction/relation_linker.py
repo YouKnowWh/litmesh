@@ -58,7 +58,7 @@ class RelationLinker:
             for i, c in enumerate(claims)
         )
 
-        prompt = RELATION_LINKING_PROMPT.format(claims_text=claims_text[:4000])
+        prompt = RELATION_LINKING_PROMPT.replace("{claims_text}", claims_text[:4000])
         raw_response = self.llm.complete(prompt)
         items = self._parse_response(raw_response)
 

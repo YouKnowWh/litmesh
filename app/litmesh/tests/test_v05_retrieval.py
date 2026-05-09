@@ -14,6 +14,7 @@ from app.litmesh.storage.sqlite import LitMeshDB
 from app.litmesh.models.corpus import CorpusCard
 from app.litmesh.models.graph import SeriesGraph
 from app.litmesh.models.paper import PaperCard
+from app.litmesh.models.section import SectionBlock, HeadingLevel
 from app.litmesh.models.claim import ClaimBlock, ClaimType, ClaimImportance, ClaimStatus
 from app.litmesh.models.evidence import EvidenceBlock, EvidenceType
 from app.litmesh.models.limitation import LimitationBlock, RiskType
@@ -306,6 +307,25 @@ class TestHybridRetriever:
         result = retriever.retrieve("CPE-3DF框架的伦理维度", [graph_id])
         assert len(result["concepts"]) >= 0  # May be 0 if no concepts in scope
 
+    def test_context_block_fallback_walks_paragraph_neighbors(self, db, retrieval_setup):
+        """When graph hits are thin, retrieval falls back to paragraph chunk walking."""
+        db, graph_id = retrieval_setup
+        retriever = HybridRetriever(db)
+
+        result = retriever.retrieve(
+            "虚拟实验",
+            [graph_id],
+            top_k=10,
+            include_context_blocks=True,
+            context_window=1,
+        )
+
+        headings = [b["heading"] for b in result["context_blocks"]]
+        assert "虚拟实验 P1" in headings
+        assert "虚拟实验 P2" in headings
+        assert any("真实实验" in b["raw_text"] for b in result["context_blocks"])
+        assert "chunk_walk" in result["method"]
+
 
 # ============================================================
 # VectorStore tests
@@ -405,6 +425,42 @@ def retrieval_setup(db):
         status=ClaimStatus.ACTIVE, source_span_id=span_id,
     )
     db.insert_claim(claim)
+
+    s1 = SectionBlock(
+        graph_id=graph.graph_id,
+        paper_id=paper.paper_id,
+        heading="虚拟实验 P1",
+        heading_path=["虚拟实验", "P1"],
+        heading_level=HeadingLevel.PARAGRAPH_GROUP,
+        raw_text="AI虚拟实验可以帮助学生预习实验流程并降低试错成本。",
+        page_start=2,
+    )
+    s2 = SectionBlock(
+        graph_id=graph.graph_id,
+        paper_id=paper.paper_id,
+        heading="虚拟实验 P2",
+        heading_path=["虚拟实验", "P2"],
+        heading_level=HeadingLevel.PARAGRAPH_GROUP,
+        raw_text="但是虚拟实验不能完全替代真实实验，因为真实实验包含操作手感和误差处理。",
+        page_start=2,
+        prev_section_id=s1.section_id,
+    )
+    db.insert_section(s1)
+    db.insert_section(s2)
+    db.conn.execute(
+        "UPDATE section_blocks SET next_section_id = ? WHERE section_id = ?",
+        (s2.section_id, s1.section_id),
+    )
+    db.conn.commit()
+    db.insert_relation(GraphRelation(
+        graph_id=graph.graph_id,
+        source_id=s1.section_id,
+        target_id=s2.section_id,
+        source_type="section",
+        target_type="section",
+        relation_type=GraphRelationType.NEXT,
+        confidence=1.0,
+    ))
 
     lim = LimitationBlock(
         graph_id=graph.graph_id, paper_id=paper.paper_id,

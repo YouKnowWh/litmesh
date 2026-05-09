@@ -1,12 +1,12 @@
 """
-Section splitter: splits extracted PDF text into SectionBlocks.
+Section splitter: splits extracted PDF text into paragraph-level SectionBlocks.
 
 Strategy:
 1. Detect heading patterns via regex (numbered sections, Chinese chapter headings, etc.)
-2. Build heading hierarchy (heading_path)
-3. Split text into sections at each heading boundary
+2. Use headings as structural context (heading_path), not as the primary chunk
+3. Split the body into paragraph blocks
 4. Assign page ranges based on text offset lookup
-5. Link sections with prev/next/parent pointers
+5. Link paragraph blocks with prev/next pointers
 
 This is heuristic-based for v0.1. Future versions can use LLM for heading detection.
 """
@@ -34,9 +34,11 @@ HEADING_PATTERNS = [
     (re.compile(r"^(Abstract|Introduction|Conclusion|References|Acknowledgments)\s*$", re.IGNORECASE), HeadingLevel.SECTION),
     # Chinese chapter: "第一章", "第1章"
     (re.compile(r"^第[一二三四五六七八九十\d]+章\s*(.*)"), HeadingLevel.CHAPTER),
-    # Bold-style: lines that are short (< 60 chars) and followed by substantial text
-    (re.compile(r"^([一-鿿\w][一-鿿\w\s]{2,50})$"), HeadingLevel.SUBSECTION),
+    # Common short academic headings without explicit numbering
+    (re.compile(r"^[一-鿿A-Za-z0-9\-—（）()·:：\s]{2,40}(框架设计|风险分析|实验验证|分析|设计|方法|结果|讨论)$"), HeadingLevel.SECTION),
 ]
+
+_PARAGRAPH_ENDINGS = tuple("。！？!?；;.")
 
 
 def _detect_heading_level(text: str, depth: int) -> HeadingLevel:
@@ -77,15 +79,16 @@ def split_sections(
     paper_id: str,
     graph_id: str,
     pages: list[dict],
-    min_section_chars: int = 200,
+    min_section_chars: int = 40,
 ) -> list[SectionBlock]:
-    """Split extracted PDF text into SectionBlocks.
+    """Split extracted PDF text into paragraph-level SectionBlocks.
 
     Algorithm:
-    1. Walk through lines; when a heading pattern matches, start a new section.
-    2. Accumulate text until the next heading.
-    3. Skip sections shorter than min_section_chars (merge into parent).
-    4. Build heading_path and link prev/next/parent.
+    1. Walk through lines; when a heading pattern matches, update heading context.
+    2. Split the text under each heading into paragraph blocks.
+    3. Keep heading_path on every paragraph so traversal can recover context.
+    4. Link paragraph blocks with prev/next. The actual next pointer is written
+       after DB insertion in pipeline.py to avoid FK violations.
     """
     lines = full_text.split("\n")
     page_map = _build_page_map(pages)
@@ -99,70 +102,127 @@ def split_sections(
         for pattern, default_level in HEADING_PATTERNS:
             m = pattern.match(line_stripped)
             if m:
-                depth = len(m.group(1).split(".")) if "." in (m.group(1) or "") else 1
-                level = _detect_heading_level(line_stripped, depth)
+                token = m.group(1) if m.groups() else ""
+                depth = len(token.split(".")) if "." in token else 1
+                level = _detect_heading_level(line_stripped, depth) if "." in token else default_level
                 headings.append((i, line_stripped, level, depth))
                 break
 
-    if not headings:
-        # No headings found: treat entire text as one section
+    # Phase 2: build paragraph blocks between headings.
+    paragraph_blocks = []
+    heading_stack = []  # For parent tracking
+
+    segments = []
+    if headings:
+        for idx, (line_idx, heading_text, level, depth) in enumerate(headings):
+            heading_start = sum(len(l) + 1 for l in lines[:line_idx])
+            content_start = heading_start + len(lines[line_idx]) + 1
+            if idx + 1 < len(headings):
+                next_line_idx = headings[idx + 1][0]
+                content_end = sum(len(l) + 1 for l in lines[:next_line_idx])
+            else:
+                content_end = len(full_text)
+
+            while heading_stack and heading_stack[-1][1] >= depth:
+                heading_stack.pop()
+            heading_stack.append((heading_text, depth))
+            heading_path = [h[0] for h in heading_stack]
+            segments.append((heading_text, list(heading_path), content_start, content_end))
+    else:
+        segments.append(("正文", ["正文"], 0, len(full_text)))
+
+    for heading_text, heading_path, content_start, content_end in segments:
+        segment_text = full_text[content_start:content_end]
+        paragraphs = _split_paragraphs(segment_text, content_start)
+        para_index = 1
+        for paragraph_text, char_start, char_end in paragraphs:
+            if len(paragraph_text) < min_section_chars and paragraph_blocks:
+                continue
+            page_start = _find_page_for_offset(char_start, page_map)
+            page_end = _find_page_for_offset(char_end, page_map)
+            paragraph_label = f"P{para_index}"
+            paragraph_blocks.append(_make_section(
+                paper_id=paper_id,
+                graph_id=graph_id,
+                heading=f"{heading_text} {paragraph_label}",
+                heading_path=[*heading_path, paragraph_label],
+                heading_level=HeadingLevel.PARAGRAPH_GROUP,
+                text=paragraph_text,
+                pages=pages,
+                page_map=page_map,
+                char_start=char_start,
+                char_end=char_end,
+                page_start=page_start,
+                page_end=page_end,
+            ))
+            para_index += 1
+
+    # If all sections were filtered out, fall back to whole-text
+    if not paragraph_blocks:
         return [_make_section(
             paper_id=paper_id, graph_id=graph_id,
             heading="正文", heading_path=["正文"],
-            heading_level=HeadingLevel.SECTION,
+            heading_level=HeadingLevel.PARAGRAPH_GROUP,
             text=full_text, pages=pages, page_map=page_map,
             char_start=0, char_end=len(full_text),
         )]
 
-    # Phase 2: build sections between headings
-    sections = []
-    heading_stack = []  # For parent tracking
-
-    for idx, (line_idx, heading_text, level, depth) in enumerate(headings):
-        # Determine text span
-        char_start = sum(len(l) + 1 for l in lines[:line_idx])
-        if idx + 1 < len(headings):
-            next_line_idx = headings[idx + 1][0]
-            char_end = sum(len(l) + 1 for l in lines[:next_line_idx])
-        else:
-            char_end = len(full_text)
-
-        section_text = full_text[char_start:char_end].strip()
-
-        # Build heading path
-        while heading_stack and heading_stack[-1][1] >= depth:
-            heading_stack.pop()
-        heading_stack.append((heading_text, depth))
-        heading_path = [h[0] for h in heading_stack]
-
-        page_start = _find_page_for_offset(char_start, page_map)
-        page_end = _find_page_for_offset(char_end, page_map)
-
-        section = _make_section(
-            paper_id=paper_id, graph_id=graph_id,
-            heading=heading_text, heading_path=list(heading_path),
-            heading_level=level,
-            text=section_text, pages=pages, page_map=page_map,
-            char_start=char_start, char_end=char_end,
-            page_start=page_start, page_end=page_end,
-            parent_section_id=None,  # Linked in phase 3
-        )
-        sections.append(section)
-
-    # Phase 3: link prev/next/parent
-    for i, section in enumerate(sections):
+    # Phase 3: link prev/next paragraph context
+    # Note: next_section_id is left NULL during initial insert to avoid FK violations.
+    # It will be updated after all sections are inserted into the database.
+    for i, section in enumerate(paragraph_blocks):
         if i > 0:
-            section.prev_section_id = sections[i - 1].section_id
-        if i < len(sections) - 1:
-            section.next_section_id = sections[i + 1].section_id
-        # Parent is the closest preceding section with shallower depth
-        current_depth = len(section.heading_path)
-        for j in range(i - 1, -1, -1):
-            if len(sections[j].heading_path) < current_depth:
-                section.parent_section_id = sections[j].section_id
-                break
+            section.prev_section_id = paragraph_blocks[i - 1].section_id
+        # next_section_id is set after insertion (see pipeline.py)
 
-    return sections
+    return paragraph_blocks
+
+
+def _split_paragraphs(text: str, base_offset: int) -> list[tuple[str, int, int]]:
+    """Split a heading body into paragraph spans.
+
+    Blank lines are treated as hard paragraph boundaries. Single newlines are
+    preserved as softer boundaries, with short wrapped lines merged when they
+    appear to be PDF line-break artifacts.
+    """
+    paragraphs: list[tuple[str, int, int]] = []
+    current: list[str] = []
+    current_start: Optional[int] = None
+    cursor = base_offset
+
+    def flush(end_offset: int):
+        nonlocal current, current_start
+        if not current or current_start is None:
+            current = []
+            current_start = None
+            return
+        paragraph = "".join(current).strip()
+        if paragraph:
+            paragraphs.append((paragraph, current_start, end_offset))
+        current = []
+        current_start = None
+
+    for raw_line in text.splitlines(keepends=True):
+        line_start = cursor
+        cursor += len(raw_line)
+        stripped = raw_line.strip()
+        if not stripped:
+            flush(line_start)
+            continue
+        if current_start is None:
+            current_start = line_start
+            current.append(stripped)
+            continue
+        previous = current[-1]
+        if previous.endswith(_PARAGRAPH_ENDINGS):
+            flush(line_start)
+            current_start = line_start
+            current.append(stripped)
+        else:
+            current.append(stripped)
+
+    flush(base_offset + len(text))
+    return paragraphs
 
 
 def _make_section(

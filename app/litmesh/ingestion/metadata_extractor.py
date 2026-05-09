@@ -67,7 +67,7 @@ class MetadataExtractor:
         are always in the beginning of a paper).
         """
         text_sample = full_text[:3000]
-        prompt = METADATA_EXTRACTION_PROMPT.format(text=text_sample)
+        prompt = METADATA_EXTRACTION_PROMPT.replace("{text}", text_sample)
 
         raw_response = self.llm.complete(prompt)
         metadata = self._parse_response(raw_response)

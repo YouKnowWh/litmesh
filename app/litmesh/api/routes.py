@@ -20,7 +20,8 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+import shutil
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from pydantic import BaseModel
 
 from ..models.corpus import CorpusCard, CorpusType, IntegrationPolicy
@@ -51,20 +52,50 @@ class GraphCreate(BaseModel):
 class ImportRequest(BaseModel):
     pdf_path: str
 
+DATA_DIR = Path("data")
+
+def _run_extraction_safe(db, graph_id, paper_id):
+    """Run v0.2 extraction in a background thread, logging any errors."""
+    try:
+        from ..extraction.llm_client import LLMClient
+        llm = LLMClient()
+        pipeline = IngestionPipeline(db, llm, graph_id)
+        pipeline.run_v0_2(paper_id)
+    except Exception as e:
+        import logging
+        logging.getLogger("litmesh").error(f"Background extraction failed for {paper_id}: {e}")
+
 class InboxDecision(BaseModel):
     reason: str = ""
     new_confidence: Optional[float] = None
 
 
-def create_app(db, llm_client: Optional[LLMClient] = None) -> FastAPI:
-    """Factory function to create the FastAPI app with LitMesh dependencies."""
+def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
+               embed_provider=None) -> FastAPI:
+    """Factory function to create the FastAPI app with LitMesh dependencies.
 
-    if llm_client is None:
-        llm_client = LLMClient()
+    Args:
+        db: LitMeshDB instance.
+        llm_client: Single LLMClient (backward-compatible). Ignored if llm_clients given.
+        llm_clients: MultiLLMClient with per-role clients (extraction/review/compilation/default).
+        embed_provider: EmbeddingProvider for vector search.
+    """
+
+    if llm_clients is not None:
+        llm_extraction = llm_clients.extraction
+        llm_review = llm_clients.review
+    elif llm_client is not None:
+        llm_extraction = llm_client
+        llm_review = llm_client
+    else:
+        llm_extraction = LLMClient()
+        llm_review = llm_extraction
+
+    # Store embed_provider for use by endpoints that need it
+    app_state = {"embed_provider": embed_provider}
 
     app = FastAPI(title="LitMesh API", version="0.1.0")
     review_mgr = ReviewManager(db)
-    # Lazy init: pipeline needs graph_id per-request
 
     @app.post("/corpora")
     async def create_corpus(req: CorpusCreate):
@@ -95,21 +126,172 @@ def create_app(db, llm_client: Optional[LLMClient] = None) -> FastAPI:
     @app.post("/papers/import")
     async def import_paper(req: ImportRequest, graph_id: str = Query(...)):
         """Import a PDF (v0.1). Returns paper_id and section count."""
-        pipeline = IngestionPipeline(db, llm_client, graph_id)
+        pipeline = IngestionPipeline(db, llm_extraction, graph_id)
         result = pipeline.run_v0_1(req.pdf_path)
         return {"ok": True, **result}
+
+    @app.post("/papers/upload")
+    async def upload_paper(file: UploadFile = File(...), graph_id: str = Query(...)):
+        """Upload a PDF file and run v0.1 import. Returns paper_id and section count."""
+        if not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(400, "Only PDF files are accepted")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = file.filename.replace('/', '_').replace('\\', '_')
+        dest = DATA_DIR / safe_name
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        pipeline = IngestionPipeline(db, llm_extraction, graph_id)
+        result = pipeline.run_v0_1(str(dest))
+
+        # Trigger v0.2 extraction in background (offloaded to thread to avoid blocking)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _run_extraction_safe, db, graph_id, result["paper_id"])
+
+        return {"ok": True, "file": safe_name, **result, "extraction": "started"}
+
+    @app.get("/papers/{paper_id}/extraction-status")
+    async def get_extraction_status(paper_id: str):
+        """Check extraction progress for a paper."""
+        runs = db.conn.execute(
+            "SELECT target, status, items_produced, items_accepted, started_at, completed_at "
+            "FROM extraction_runs WHERE paper_id = ? ORDER BY created_at DESC",
+            (paper_id,)
+        ).fetchall()
+        return {
+            "paper_id": paper_id,
+            "runs": [dict(r) for r in runs],
+            "total_claims": db.conn.execute("SELECT COUNT(*) FROM claim_blocks WHERE paper_id=?", (paper_id,)).fetchone()[0],
+            "total_evidence": db.conn.execute("SELECT COUNT(*) FROM evidence_blocks WHERE paper_id=?", (paper_id,)).fetchone()[0],
+            "total_limitations": db.conn.execute("SELECT COUNT(*) FROM limitation_blocks WHERE paper_id=?", (paper_id,)).fetchone()[0],
+            "total_concepts": db.conn.execute("SELECT COUNT(*) FROM concept_keys WHERE graph_id IN (SELECT graph_id FROM paper_cards WHERE paper_id=?)", (paper_id,)).fetchone()[0],
+        }
+
+    @app.get("/corpora")
+    async def list_corpora():
+        rows = db.conn.execute("SELECT * FROM corpora ORDER BY created_at DESC").fetchall()
+        return {"corpora": [dict(r) for r in rows], "count": len(rows)}
+
+    @app.get("/graphs")
+    async def list_graphs(corpus_id: Optional[str] = None):
+        if corpus_id:
+            rows = db.conn.execute("SELECT * FROM series_graphs WHERE corpus_id = ? ORDER BY created_at DESC", (corpus_id,)).fetchall()
+        else:
+            rows = db.conn.execute("SELECT * FROM series_graphs ORDER BY created_at DESC").fetchall()
+        return {"graphs": [dict(r) for r in rows], "count": len(rows)}
+
+    @app.get("/graph-relations")
+    async def list_graph_relations(graph_id: Optional[str] = None, paper_id: Optional[str] = None):
+        """Return typed graph relations + node metadata for visualization."""
+        # Get relations
+        if graph_id:
+            rels = db.conn.execute(
+                "SELECT * FROM graph_relations WHERE graph_id = ? ORDER BY importance DESC",
+                (graph_id,)
+            ).fetchall()
+        else:
+            rels = db.conn.execute("SELECT * FROM graph_relations ORDER BY importance DESC LIMIT 500").fetchall()
+
+        # Collect all node IDs referenced in relations
+        node_ids = set()
+        for r in rels:
+            node_ids.add(r["source_id"])
+            node_ids.add(r["target_id"])
+
+        # Fetch claim nodes
+        claims = {}
+        if node_ids:
+            placeholders = ",".join("?" * len(node_ids))
+            claim_rows = db.conn.execute(
+                f"SELECT claim_id, claim_text, claim_type, extraction_confidence, status, concept_keys FROM claim_blocks WHERE claim_id IN ({placeholders})",
+                list(node_ids)
+            ).fetchall()
+            for cr in claim_rows:
+                claims[cr["claim_id"]] = dict(cr)
+
+        # Fetch concept nodes
+        concepts = {}
+        if graph_id:
+            concept_rows = db.conn.execute(
+                "SELECT concept_key, namespace, label_zh, definition, status FROM concept_keys WHERE graph_id = ? AND status = 'active'",
+                (graph_id,)
+            ).fetchall()
+            for cc in concept_rows:
+                concepts[cc["concept_key"]] = dict(cc)
+
+        return {
+            "relations": [dict(r) for r in rels],
+            "claims": claims,
+            "concepts": concepts,
+        }
+
+    @app.get("/graph-full")
+    async def get_full_graph(graph_id: str = Query(...), paper_id: Optional[str] = None):
+        """Return complete graph data for visualization: claims, evidence, limitations, concepts, relations."""
+        # Claims
+        claims_sql = "SELECT claim_id, claim_text, claim_type, extraction_confidence, status, concept_keys, evidence_refs, limitation_refs, importance FROM claim_blocks WHERE graph_id = ?"
+        params = [graph_id]
+        if paper_id:
+            claims_sql += " AND paper_id = ?"
+            params.append(paper_id)
+        claims = [dict(r) for r in db.conn.execute(claims_sql, params).fetchall()]
+
+        # Evidence
+        ev_sql = "SELECT evidence_id, evidence_text, evidence_type, strength, supports_claim_ids, status FROM evidence_blocks WHERE graph_id = ?"
+        ev_params = [graph_id]
+        if paper_id:
+            ev_sql += " AND paper_id = ?"
+            ev_params.append(paper_id)
+        evidence = [dict(r) for r in db.conn.execute(ev_sql, ev_params).fetchall()]
+
+        # Limitations
+        lim_sql = "SELECT limitation_id, limitation_text, risk_type, severity, affected_claim_ids, status FROM limitation_blocks WHERE graph_id = ?"
+        lim_params = [graph_id]
+        if paper_id:
+            lim_sql += " AND paper_id = ?"
+            lim_params.append(paper_id)
+        limitations = [dict(r) for r in db.conn.execute(lim_sql, lim_params).fetchall()]
+
+        # Concepts
+        concepts = [dict(r) for r in db.conn.execute(
+            "SELECT concept_key, namespace, label_zh, definition, status, parent_keys, child_keys, related_keys FROM concept_keys WHERE graph_id = ? AND status = 'active'",
+            (graph_id,)
+        ).fetchall()]
+
+        # Relations
+        relations = [dict(r) for r in db.conn.execute(
+            "SELECT * FROM graph_relations WHERE graph_id = ? ORDER BY importance DESC",
+            (graph_id,)
+        ).fetchall()]
+
+        # Sections for context ordering
+        sections = [dict(r) for r in db.conn.execute(
+            "SELECT section_id, heading, heading_path, page_start, page_end FROM section_blocks WHERE graph_id = ? ORDER BY page_start, section_id",
+            (graph_id,)
+        ).fetchall()]
+
+        return {
+            "graph_id": graph_id,
+            "paper_id": paper_id,
+            "claims": claims,
+            "evidence": evidence,
+            "limitations": limitations,
+            "concepts": concepts,
+            "relations": relations,
+            "sections": sections,
+        }
 
     @app.post("/papers/{paper_id}/extract")
     async def extract_paper(paper_id: str, graph_id: str = Query(...)):
         """Run v0.2 extraction on a paper."""
-        pipeline = IngestionPipeline(db, llm_client, graph_id)
+        pipeline = IngestionPipeline(db, llm_extraction, graph_id)
         stats = pipeline.run_v0_2(paper_id)
         return {"ok": True, "stats": stats}
 
     @app.post("/papers/{paper_id}/full")
     async def full_pipeline(paper_id: str, req: ImportRequest, graph_id: str = Query(...)):
         """Run v0.1 + v0.2 together."""
-        pipeline = IngestionPipeline(db, llm_client, graph_id)
+        pipeline = IngestionPipeline(db, llm_extraction, graph_id)
         result = pipeline.run_full(req.pdf_path)
         return {"ok": True, **result}
 

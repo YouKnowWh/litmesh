@@ -154,14 +154,13 @@ class SeriesDetector:
 
     def _llm_match(self, paper_card, group_info: dict) -> dict | None:
         """LLM-based semantic matching for differently-worded titles."""
-        prompt = SERIES_DETECTION_PROMPT.format(
-            title=paper_card.title,
-            year=paper_card.year or "",
-            framework=paper_card.main_framework,
-            keywords=", ".join(paper_card.keywords[:5]),
-            group_name=group_info["name"],
-            paper_titles=", ".join(group_info.get("_titles", [])[:5]),
-        )
+        prompt = (SERIES_DETECTION_PROMPT
+            .replace("{title}", paper_card.title)
+            .replace("{year}", str(paper_card.year or ""))
+            .replace("{framework}", paper_card.main_framework)
+            .replace("{keywords}", ", ".join(paper_card.keywords[:5]))
+            .replace("{group_name}", group_info["name"])
+            .replace("{paper_titles}", ", ".join(group_info.get("_titles", [])[:5])))
         try:
             raw = self.llm.complete(prompt, system="Output only JSON.", temperature=0.1)
             return _parse_json(raw)

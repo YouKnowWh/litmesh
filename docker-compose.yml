@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  litmesh:
+    build: .
+    container_name: litmesh
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # ---- Global fallback ----
+      - LITMESH_LLM_PROVIDER=${LITMESH_LLM_PROVIDER:-anthropic}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-deepseek-v4-pro[1m]}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # ---- Extraction role (claim/evidence/limitation/concept) ----
+      # Uses global fallback by default. Override to use a cheaper model:
+      # LITMESH_EXTRACTION_MODEL=deepseek-v4-flash
+      # LITMESH_EXTRACTION_PROVIDER=anthropic
+      - LITMESH_EXTRACTION_MODEL=${LITMESH_EXTRACTION_MODEL:-}
+      - LITMESH_EXTRACTION_PROVIDER=${LITMESH_EXTRACTION_PROVIDER:-}
+      - LITMESH_EXTRACTION_BASE_URL=${LITMESH_EXTRACTION_BASE_URL:-}
+      - LITMESH_EXTRACTION_API_KEY=${LITMESH_EXTRACTION_API_KEY:-}
+      # ---- Review role (bridge/series/inbox) ----
+      - LITMESH_REVIEW_MODEL=${LITMESH_REVIEW_MODEL:-}
+      - LITMESH_REVIEW_PROVIDER=${LITMESH_REVIEW_PROVIDER:-}
+      - LITMESH_REVIEW_BASE_URL=${LITMESH_REVIEW_BASE_URL:-}
+      - LITMESH_REVIEW_API_KEY=${LITMESH_REVIEW_API_KEY:-}
+      # ---- Compilation role (PromptPacket/knowledge query) ----
+      - LITMESH_COMPILATION_MODEL=${LITMESH_COMPILATION_MODEL:-}
+      - LITMESH_COMPILATION_PROVIDER=${LITMESH_COMPILATION_PROVIDER:-}
+      - LITMESH_COMPILATION_BASE_URL=${LITMESH_COMPILATION_BASE_URL:-}
+      - LITMESH_COMPILATION_API_KEY=${LITMESH_COMPILATION_API_KEY:-}
+      # ---- Embedding: SiliconFlow ----
+      - LITMESH_EMBED_PROVIDER=${LITMESH_EMBED_PROVIDER:-openai_compatible}
+      - LITMESH_EMBED_MODEL=${LITMESH_EMBED_MODEL:-BAAI/bge-large-zh-v1.5}
+      - LITMESH_EMBED_BASE_URL=${LITMESH_EMBED_BASE_URL:-https://api.siliconflow.cn/v1}
+      - LITMESH_EMBED_API_KEY=${LITMESH_EMBED_API_KEY:-sk-olueugsredhhxmivvkwklrowwqhajockffwljwcezfmsbysf}
+      - LITMESH_EMBED_DIMENSION=${LITMESH_EMBED_DIMENSION:-1024}
+    restart: unless-stopped

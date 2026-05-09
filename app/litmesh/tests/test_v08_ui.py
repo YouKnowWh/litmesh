@@ -158,7 +158,7 @@ class TestUIEndpoints:
     def test_ui_served(self, client):
         r = client.get("/ui")
         assert r.status_code == 200
-        assert "LitMesh Admin" in r.text
+        assert "LitMesh 管理后台" in r.text
 
     def test_evidence_list(self, client):
         r = client.get("/evidence")

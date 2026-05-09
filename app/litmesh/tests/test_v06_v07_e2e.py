@@ -40,7 +40,8 @@ def db():
 
 
 def _make_span(db, paper_id):
-    sid = f"span_{paper_id[:8]}"
+    existing = db.conn.execute("SELECT COUNT(*) FROM source_spans").fetchone()[0]
+    sid = f"span_{paper_id[:8]}_{existing}"
     db.insert_span(SourceSpan(
         span_id=sid, paper_id=paper_id,
         span_type="paragraph", source_text="Test",

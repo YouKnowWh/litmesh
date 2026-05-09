@@ -3,355 +3,605 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LitMesh Admin</title>
+<title>LitMesh 管理后台</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--accent:#58a6ff;--border:#30363d;--hover:#161b22;--red:#f85149;--green:#3fb950;--yellow:#d2991d;--dim:#8b949e}
+:root {
+  --bg: #0a0e14; --surface: #131820; --raised: #1a2030;
+  --fg: #d2d6e0; --fg2: #8b93a8; --fg3: #565e75;
+  --accent: #6c8cff; --accent2: #4af; --accent-glow: rgba(108,140,255,0.15);
+  --green: #3fb950; --red: #f85149; --orange: #d2991d; --purple: #a371f7;
+  --border: #1e2a3a; --radius: 10px;
+  --font: 'SF Pro Display', 'PingFang SC', system-ui, sans-serif;
+  --mono: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', monospace;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5}
-header{background:#161b22;border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:16px}
-header h1{font-size:18px;color:var(--accent)}
-nav{display:flex;gap:4px;overflow-x:auto;padding:8px 20px;border-bottom:1px solid var(--border);background:var(--bg)}
-nav button{padding:6px 14px;border:1px solid transparent;border-radius:6px;background:none;color:var(--dim);cursor:pointer;white-space:nowrap;font-size:13px}
-nav button:hover{background:var(--hover);color:var(--fg)}
-nav button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-main{padding:20px;max-width:1400px;margin:0 auto}
-.panel{display:none}
-.panel.active{display:block}
-.card{border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px;background:#0d1117}
-.card h3{font-size:15px;margin-bottom:6px}
-.card .meta{font-size:12px;color:var(--dim);margin-bottom:4px}
-.card .text{font-size:13px;margin-top:4px;max-height:120px;overflow-y:auto}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;margin-right:4px}
-.badge-green{background:var(--green);color:#000}
-.badge-red{background:var(--red);color:#fff}
-.badge-yellow{background:var(--yellow);color:#000}
-.badge-blue{background:var(--accent);color:#fff}
-.badge-dim{background:var(--border);color:var(--dim)}
-.actions{margin-top:8px;display:flex;gap:8px}
-.actions button{padding:4px 12px;border:1px solid var(--border);border-radius:4px;background:var(--hover);color:var(--fg);cursor:pointer;font-size:12px}
-.actions button:hover{background:var(--accent);color:#fff}
-.actions button.danger:hover{background:var(--red)}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
-th{color:var(--dim);font-weight:500;position:sticky;top:0;background:var(--bg)}
-tr:hover{background:var(--hover)}
-.search{margin-bottom:16px}
-.search input{padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);width:300px;font-size:14px}
-.stats{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-.stat{padding:12px 20px;border:1px solid var(--border);border-radius:8px;text-align:center;min-width:80px}
-.stat .num{font-size:24px;font-weight:700;color:var(--accent)}
-.stat .label{font-size:11px;color:var(--dim);margin-top:2px}
-.inbox-item{border-left:3px solid var(--border);padding:10px 14px;margin-bottom:8px;border-radius:0 6px 6px 0}
-.inbox-item.high{border-left-color:var(--red)}
-.inbox-item.medium{border-left-color:var(--yellow)}
-.inbox-item.low{border-left-color:var(--dim)}
-pre{background:#161b22;padding:12px;border-radius:6px;overflow:auto;font-size:12px;max-height:500px}
+body{font-family:var(--font);background:var(--bg);color:var(--fg);line-height:1.5;overflow-x:hidden}
+body::before{content:'';position:fixed;top:0;left:0;width:100%;height:100%;background:radial-gradient(ellipse at 20% 0%, rgba(108,140,255,0.04) 0%, transparent 60%),radial-gradient(ellipse at 80% 100%, rgba(74,170,255,0.03) 0%, transparent 60%);pointer-events:none;z-index:0}
+header{position:sticky;top:0;z-index:100;background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:20px;backdrop-filter:blur(12px)}
+header h1{font-size:17px;font-weight:700;color:var(--fg);letter-spacing:-0.3px;display:flex;align-items:center;gap:8px}
+header h1 span.logo{display:inline-block;width:24px;height:24px;border-radius:6px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-size:13px;line-height:24px;text-align:center}
+#global-progress{flex:1;min-width:280px;display:none}
+#global-progress .gp-title{font-size:12px;color:var(--accent);margin-bottom:2px;font-weight:500}
+#global-progress .gp-bar{height:4px;border-radius:2px;background:var(--border);overflow:hidden}
+#global-progress .gp-bar-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width 0.5s ease}
+#global-progress .gp-steps{display:flex;gap:10px;margin-top:3px;font-size:10px;font-family:var(--mono)}
+.gp-s-done{color:var(--green)}.gp-s-active{color:var(--accent);font-weight:600}.gp-s-pending{color:var(--fg3)}
+nav{display:flex;gap:2px;padding:8px 24px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:48px;z-index:99}
+nav button{padding:7px 16px;border:1px solid transparent;border-radius:8px;background:none;color:var(--fg2);cursor:pointer;font-size:13px;font-weight:500;font-family:var(--font);transition:all 0.2s}
+nav button:hover{background:var(--raised);color:var(--fg)}
+nav button.active{background:var(--accent-glow);color:var(--accent);border-color:rgba(108,140,255,0.2)}
+main{position:relative;z-index:1;padding:24px;max-width:1500px;margin:0 auto}
+h2{font-size:20px;font-weight:700;margin-bottom:20px;letter-spacing:-0.3px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:14px;transition:border-color 0.2s}
+.card:hover{border-color:rgba(108,140,255,0.25)}
+.card h3{font-size:15px;margin-bottom:6px;font-weight:600}
+.card .meta{font-size:12px;color:var(--fg2);margin-bottom:4px}
+.card .text{font-size:13px;margin-top:6px;line-height:1.6}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:500;margin-right:5px}
+.bg-green{background:rgba(63,185,80,0.15);color:var(--green)}
+.bg-red{background:rgba(248,81,73,0.15);color:var(--red)}
+.bg-orange{background:rgba(210,153,29,0.15);color:var(--orange)}
+.bg-blue{background:rgba(108,140,255,0.15);color:var(--accent)}
+.bg-purple{background:rgba(163,113,247,0.15);color:var(--purple)}
+.bg-dim{background:var(--border);color:var(--fg2)}
+.btn{padding:8px 18px;border:1px solid var(--border);border-radius:8px;background:var(--raised);color:var(--fg);cursor:pointer;font-size:13px;font-weight:500;font-family:var(--font);transition:all 0.2s}
+.btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover{background:var(--accent2)}
+.btn-success{background:var(--green);color:#000;border-color:var(--green)}
+.btn-danger{background:var(--red);color:#fff;border-color:var(--red)}
+.btn-sm{padding:5px 12px;font-size:12px}
+.actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.search-box{margin-bottom:18px}
+.search-box input{padding:10px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--fg);font-size:14px;width:100%;max-width:400px;font-family:var(--font);transition:border-color 0.2s}
+.search-box input:focus{outline:none;border-color:var(--accent)}
+select{padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--fg);font-size:13px;font-family:var(--font);cursor:pointer}
+select:focus{outline:none;border-color:var(--accent)}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center}
+.stat-card .num{font-size:28px;font-weight:700;background:linear-gradient(135deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat-card .label{font-size:11px;color:var(--fg2);margin-top:4px;text-transform:uppercase;letter-spacing:0.5px}
+.file-drop{border:2px dashed var(--border);border-radius:var(--radius);padding:48px 24px;text-align:center;cursor:pointer;transition:all 0.3s;max-width:500px;background:var(--surface)}
+.file-drop:hover,.file-drop.dragover{border-color:var(--accent);background:var(--accent-glow)}
+.file-drop .icon{font-size:42px;margin-bottom:10px}
+.file-drop .label{font-size:14px;color:var(--fg);font-weight:500}
+.file-drop .hint{font-size:12px;color:var(--fg2);margin-top:4px}
+.file-drop input[type=file]{display:none}
+.graph-container{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;min-height:650px}
+.graph-container svg{display:block}
+.graph-legend{position:absolute;top:16px;right:16px;background:rgba(19,24,32,0.9);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:11px;backdrop-filter:blur(8px)}
+.graph-legend .item{display:flex;align-items:center;gap:6px;margin:3px 0}
+.graph-legend .dot{width:10px;height:10px;border-radius:50%}
+.graph-tooltip{position:absolute;pointer-events:none;background:var(--raised);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;max-width:320px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.4);display:none}
+.graph-tooltip .tt-type{font-weight:600;margin-bottom:2px}
+.graph-tooltip .tt-text{color:var(--fg2);font-size:11px;line-height:1.5;max-height:80px;overflow:hidden}
+.inbox-item{border-left:3px solid var(--border);padding:12px 16px;margin-bottom:8px;border-radius:0 var(--radius) var(--radius) 0;background:var(--surface)}
+.inbox-item.critical{border-left-color:var(--red)}
+.inbox-item.high{border-left-color:var(--orange)}
+.inbox-item.medium{border-left-color:var(--accent2)}
+.inbox-item.low{border-left-color:var(--fg3)}
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:8px;font-size:13px;z-index:999;animation:slideUp 0.3s ease}
+.toast-ok{background:var(--green);color:#000}
+.toast-err{background:var(--red);color:#fff}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+.empty-state{padding:60px 24px;text-align:center;color:var(--fg3)}
+.empty-state .icon{font-size:48px;margin-bottom:12px}
+.empty-state p{font-size:14px;margin-bottom:4px}
+.paper-detail-header{display:flex;gap:20px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap}
+.paper-detail-header .info{flex:1;min-width:300px}
+pre{background:var(--raised);padding:14px;border-radius:8px;overflow:auto;font-size:12px;max-height:500px;font-family:var(--mono);border:1px solid var(--border)}
+.graph-controls{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+.node-core{fill:var(--accent);stroke:var(--accent);stroke-width:2}
+.node-claim{fill:var(--green);stroke:var(--green);stroke-width:1.5}
+.node-evidence{fill:var(--accent2);stroke:var(--accent2);stroke-width:1.5}
+.node-limitation{fill:var(--red);stroke:var(--red);stroke-width:1.5}
+.node-concept{fill:var(--purple);stroke:var(--purple);stroke-width:2}
+.link-supports{stroke:var(--green);stroke-opacity:0.4}
+.link-constrains{stroke:var(--red);stroke-opacity:0.4}
+.link-contradicts{stroke:var(--orange);stroke-opacity:0.5}
+.link-refines{stroke:var(--accent);stroke-opacity:0.4}
+.link-related{stroke:var(--fg3);stroke-opacity:0.3}
+.link-concept{stroke:var(--purple);stroke-opacity:0.3}
 </style>
 </head>
 <body>
-<header><h1>LitMesh Admin</h1><span id="stat-summary" style="font-size:12px;color:var(--dim)"></span></header>
+<header>
+  <h1><span class="logo">L</span>LitMesh</h1>
+  <div id="global-progress">
+    <div class="gp-title" id="gp-title"></div>
+    <div class="gp-bar"><div class="gp-bar-fill" id="gp-bar" style="width:0%"></div></div>
+    <div class="gp-steps" id="gp-steps"></div>
+  </div>
+  <span id="stat-summary" style="font-size:12px;color:var(--fg2)"></span>
+</header>
 <nav id="tabs">
-  <button data-panel="papers" class="active">Papers</button>
-  <button data-panel="claims">Claims</button>
-  <button data-panel="sections">Sections</button>
-  <button data-panel="concepts">Concepts</button>
-  <button data-panel="inbox">Inbox</button>
-  <button data-panel="bridges">Bridges</button>
-  <button data-panel="traces">Traces</button>
-  <button data-panel="series">Series</button>
-  <button data-panel="stats">Stats</button>
+  <button data-panel="papers" class="active">论文</button>
+  <button data-panel="series-graph">系列图</button>
+  <button data-panel="bridge-graph">桥接图</button>
+  <button data-panel="inbox">审核</button>
+  <button data-panel="stats">统计</button>
 </nav>
 <main id="content"></main>
 
 <script>
 const API = '/';
-const panels = {};
+function $(s){return document.querySelector(s)}
+function $$(s){return document.querySelectorAll(s)}
 
-function $(sel){return document.querySelector(sel)}
-function $$(sel){return document.querySelectorAll(sel)}
-
-async function fetchJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(r.statusText);
+async function fetchJSON(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) {
+    let msg = r.statusText;
+    try { const e = await r.json(); msg = e.detail || msg; } catch(_){}
+    throw new Error(msg);
+  }
   return r.json();
 }
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function badge(t,c){return `<span class="badge bg-${c}">${esc(t)}</span>`}
+function toast(msg,ok){const t=document.createElement('div');t.className='toast '+(ok?'toast-ok':'toast-err');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),ok?3000:5000)}
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s||'';
-  return d.innerHTML;
+// Tab switching
+$$('#tabs button').forEach(btn=>{btn.addEventListener('click',()=>{$$('#tabs button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');loadPanel(btn.dataset.panel)})});
+
+async function loadPanel(name){
+  const m=$('#content');m.innerHTML='<p style="color:var(--fg2)">加载中...</p>';
+  try{
+    if(name==='papers')await renderPapers(m);
+    else if(name==='series-graph')await renderSeriesGraph(m);
+    else if(name==='bridge-graph')await renderBridgeGraph(m);
+    else if(name==='inbox')await renderInbox(m);
+    else if(name==='stats')await renderStats(m);
+  }catch(e){m.innerHTML=`<p style="color:var(--red)">错误: ${esc(e.message)}</p>`}
 }
 
-function badge(text, cls) {
-  return `<span class="badge badge-${cls}">${esc(text)}</span>`;
+// ---- Global progress ----
+const STEPS=[{k:'corpus',l:'语料库',p:10},{k:'graph',l:'系列图',p:25},{k:'upload',l:'上传',p:40},{k:'meta',l:'元数据',p:55},{k:'sections',l:'章节',p:70},{k:'spans',l:'锚定',p:85},{k:'done',l:'完成',p:100}];
+function globalProgress(idx){
+  const gp=document.getElementById('global-progress'),title=document.getElementById('gp-title'),bar=document.getElementById('gp-bar'),steps=document.getElementById('gp-steps');
+  if(!gp)return;
+  if(idx===-1){gp.style.display='none';return}
+  gp.style.display='block';
+  const s=STEPS[Math.min(idx,STEPS.length-1)];
+  title.textContent='导入中: '+s.l;bar.style.width=s.p+'%';
+  steps.innerHTML=STEPS.map((st,i)=>{
+    let c=i<idx?'gp-s-done':i===idx?'gp-s-active':'gp-s-pending';
+    return `<span class="${c}">${st.l}</span>`;
+  }).join('');
 }
 
-// ---- Tab switching ----
-$$('#tabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    $$('#tabs button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    loadPanel(btn.dataset.panel);
-  });
-});
-
-async function loadPanel(name) {
-  const main = $('#content');
-  main.innerHTML = '<p style="color:var(--dim)">Loading...</p>';
-  try {
-    if (name === 'papers') await renderPapers(main);
-    else if (name === 'claims') await renderClaims(main);
-    else if (name === 'sections') await renderSections(main);
-    else if (name === 'concepts') await renderConcepts(main);
-    else if (name === 'inbox') await renderInbox(main);
-    else if (name === 'bridges') await renderBridges(main);
-    else if (name === 'traces') await renderTraces(main);
-    else if (name === 'series') await renderSeries(main);
-    else if (name === 'stats') await renderStats(main);
-  } catch(e) {
-    main.innerHTML = `<p style="color:var(--red)">Error: ${esc(e.message)}</p>`;
-  }
+function onFileSel(f){
+  if(!f)return;if(!f.name.toLowerCase().endsWith('.pdf'))return toast('仅支持 PDF',false);
+  document.getElementById('fn').style.display='block';
+  document.getElementById('fn').textContent='已选择: '+f.name+' ('+(f.size/1024).toFixed(0)+' KB)';
+  window._file=f;
+}
+async function doImport(){
+  if(!window._file)return toast('请先选择 PDF',false);
+  const fn=window._file.name.replace(/\.pdf$/i,''),btn=document.getElementById('btn-imp'),st=document.getElementById('imp-status');
+  btn.disabled=true;
+  try{
+    globalProgress(0);
+    const cr=await fetchJSON(API+'corpora',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fn,domain:'import'})});
+    globalProgress(1);
+    const gr=await fetchJSON(API+'graphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corpus_id:cr.corpus_id,name:fn,concept_namespace:fn.toLowerCase()})});
+    globalProgress(2);
+    const fd=new FormData();fd.append('file',window._file);
+    const r=await fetch(API+'papers/upload?graph_id='+encodeURIComponent(gr.graph_id),{method:'POST',body:fd});
+    const data=await r.json();
+    if(r.ok){
+      globalProgress(6);
+      st.innerHTML='<span style="color:var(--green)">✓ 导入完成</span> 论文: '+data.paper_id+', '+data.section_count+' 章节';
+      toast('导入完成',true);setTimeout(()=>{globalProgress(-1);loadPanel('papers')},2000);
+    }else{globalProgress(-1);st.innerHTML='<span style="color:var(--red)">失败:</span> '+esc(data.detail||'')}
+  }catch(e){globalProgress(-1);st.innerHTML='<span style="color:var(--red)">错误:</span> '+esc(e.message)}
+  finally{btn.disabled=false}
 }
 
-// ---- Papers ----
-async function renderPapers(main) {
-  const data = await fetchJSON(API + 'papers');
-  main.innerHTML = `<h2>Papers (${data.count})</h2>
-    <div class="search"><input id="filter-papers" placeholder="Search titles..." oninput="renderPaperList()"></div>
+// ---- Papers (combined with Import) ----
+async function renderPapers(m){
+  const data=await fetchJSON(API+'papers');
+  let importHTML=`<details id="import-toggle" style="margin-bottom:20px"><summary style="cursor:pointer;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:12px">+ 导入新论文</summary>
+    <div class="file-drop" id="file-drop" onclick="document.getElementById('fi').click()">
+      <div class="icon">📄</div><div class="label">拖拽 PDF 到此处</div><div class="hint">最大 50MB · 自动解析</div>
+      <input type="file" id="fi" accept=".pdf,application/pdf" onchange="onFileSel(this.files[0])">
+    </div>
+    <div id="fn" style="margin-top:10px;color:var(--accent);display:none"></div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn btn-success" id="btn-imp" onclick="doImport()" style="padding:10px 28px;font-size:14px">导入 PDF</button>
+      <span id="imp-status" style="font-size:12px;color:var(--fg2)"></span>
+    </div>
+  </details>`;
+
+  m.innerHTML=`<h2>论文 <span style="color:var(--fg2);font-size:14px;font-weight:400">${data.count} 篇</span></h2>
+    ${importHTML}
+    <div class="search-box"><input id="fp" placeholder="搜索标题..." oninput="renderPaperList()"></div>
     <div id="paper-list"></div>`;
-  window._papers = data.papers;
-  renderPaperList();
-}
+  window._papers=data.papers;renderPaperList();
 
-function renderPaperList() {
-  const q = ($('#filter-papers')?.value||'').toLowerCase();
-  const papers = (window._papers||[]).filter(p => !q || p.title.toLowerCase().includes(q));
-  $('#paper-list').innerHTML = papers.map(p => `
+  // Bind import events
+  setTimeout(()=>{
+    const d=document.getElementById('file-drop');
+    if(!d)return;
+    d.addEventListener('dragover',e=>{e.preventDefault();d.classList.add('dragover')});
+    d.addEventListener('dragleave',()=>d.classList.remove('dragover'));
+    d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('dragover');const f=e.dataTransfer.files[0];if(f){document.getElementById('fi').files=e.dataTransfer.files;onFileSel(f)}});
+  },100);
+}
+function renderPaperList(){
+  const q=(document.getElementById('fp')?.value||'').toLowerCase();
+  const ps=(window._papers||[]).filter(p=>!q||p.title.toLowerCase().includes(q));
+  document.getElementById('paper-list').innerHTML=ps.map(p=>`
     <div class="card">
       <h3>${esc(p.title)}</h3>
-      <div class="meta">${esc(p.authors)} · ${p.year||'?'} · ${badge(p.research_type, 'dim')} · ${esc(p.main_framework)}</div>
-      <div class="meta">Paper ID: ${esc(p.paper_id)} · Graph: ${esc(p.graph_id)} · Pages: ${p.page_count}</div>
-      <div class="text">${esc(p.abstract||p.abstract_summary||'No abstract')}</div>
-    </div>`).join('') || '<p style="color:var(--dim)">No papers found</p>';
+      <div class="meta">${esc(p.authors)} · ${p.year||'?'} · ${badge(p.research_type,'dim')} · ${esc(p.main_framework)}</div>
+      <div class="meta">ID: ${esc(p.paper_id)} · 图: ${esc(p.graph_id)} · ${p.page_count}页</div>
+      <div class="text">${esc((p.abstract||p.abstract_summary||'').substring(0,200))}</div>
+      <div class="actions">
+        <button class="btn btn-sm" onclick="viewPaperDetail('${p.paper_id}')">详情</button>
+        <button class="btn btn-sm btn-primary" onclick="viewPaperGraph('${p.graph_id}','${p.paper_id}')">查看图谱</button>
+        <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="extractPaper('${p.paper_id}','${p.graph_id}')">抽取论点</button>
+      </div>
+    </div>`).join('')||'<div class="empty-state"><div class="icon">📭</div><p>暂无论文</p><p style="color:var(--fg3)">去导入页面上传 PDF</p></div>';
 }
-
-// ---- Claims ----
-async function renderClaims(main) {
-  const data = await fetchJSON(API + 'claims?limit=100');
-  main.innerHTML = `<h2>Claims (${data.count})</h2>
-    <div style="margin-bottom:12px">
-      <select id="claim-filter-type" onchange="renderClaimList()">
-        <option value="">All types</option>
-        ${[...new Set(data.claims.map(c=>c.claim_type))].map(t=>`<option>${t}</option>`).join('')}
-      </select>
+async function viewPaperDetail(pid){
+  const p=await fetchJSON(API+'papers/'+pid);
+  const secs=await fetchJSON(API+'papers/'+pid+'/sections');
+  const claims=await fetchJSON(API+'papers/'+pid+'/claims');
+  $('#content').innerHTML=`
+    <button class="btn btn-sm" onclick="loadPanel('papers')" style="margin-bottom:12px">← 返回</button>
+    <div class="paper-detail-header">
+      <div class="info">
+        <h2>${esc(p.title)}</h2>
+        <div class="meta" style="font-size:13px">${esc(p.authors)} · ${p.year||'?'} · ${badge(p.research_type,'dim')} · ${esc(p.main_framework)}</div>
+        <div class="text" style="margin-top:10px">${esc(p.abstract||p.abstract_summary||'无摘要')}</div>
+        <div class="meta" style="margin-top:8px">Pages: ${p.page_count} · Keywords: ${esc(p.keywords)}</div>
+      </div>
     </div>
-    <div id="claim-list"></div>`;
-  window._claims = data.claims;
-  renderClaimList();
+    <h3 style="margin-top:20px">章节 (${secs.count})</h3>
+    ${secs.sections.map(s=>`<div class="card"><h3>${esc(s.heading||'无标题')}</h3><div class="meta">${s.heading_path||''} · 第${s.page_start}-${s.page_end||'?'}页</div><div class="text">${esc((s.summary||s.raw_text||'').substring(0,250))}</div></div>`).join('')}
+    <h3 style="margin-top:20px">论点 (${claims.count})</h3>
+    ${claims.claims.map(c=>`<div class="card"><div class="meta">${badge(c.claim_type,'blue')} ${badge(c.status,'green')} ${badge(c.importance,'dim')} · 置信度${(c.extraction_confidence*100).toFixed(0)}%</div><div class="text">${esc(c.claim_text)}</div></div>`).join('')||'<p style="color:var(--fg3)">暂无，需要运行抽取</p>'}`;
+}
+async function extractPaper(pid,gid){try{const r=await fetchJSON(API+'papers/'+pid+'/extract?graph_id='+gid,{method:'POST'});toast('抽取完成: '+JSON.stringify(r.stats),true)}catch(e){toast(e.message,false)}}
+function viewPaperGraph(gid,pid){$$('#tabs button').forEach(b=>b.classList.remove('active'));$('#tabs button[data-panel="series-graph"]').classList.add('active');loadPanel('series-graph',{graphId:gid,paperId:pid})}
+
+// ---- Series Graph ----
+async function renderSeriesGraph(m,opts={}){
+  const graphs=await fetchJSON(API+'graphs');
+  if(!graphs.count){m.innerHTML='<div class="empty-state"><div class="icon">📊</div><p>暂无系列图</p><p style="color:var(--fg3)">导入论文后自动创建</p></div>';return}
+  const gid=opts.graphId||graphs.graphs[0].graph_id;
+  const pid=opts.paperId||'';
+  m.innerHTML=`<h2>系列图 · 知识结构</h2>
+    <div class="graph-controls">
+      <select id="sg-select" onchange="loadSeriesGraph()">${graphs.graphs.map(g=>`<option value="${g.graph_id}" ${g.graph_id===gid?'selected':''}>${esc(g.name)}</option>`).join('')}</select>
+      <button class="btn btn-sm" onclick="resetGraphZoom()">重置视图</button>
+      <span style="font-size:11px;color:var(--fg3);margin-left:8px">滚轮缩放 · 拖拽平移 · 悬停查看详情</span>
+    </div>
+    <div class="graph-container" id="graph-viz"><div class="empty-state"><div class="icon">⟳</div><p>加载中...</p></div></div>
+    <div class="graph-legend" id="graph-legend" style="display:none">
+      <div class="item"><span class="dot" style="background:var(--accent)"></span> 论点 Claim</div>
+      <div class="item"><span class="dot" style="background:var(--accent2)"></span> 证据 Evidence</div>
+      <div class="item"><span class="dot" style="background:var(--red)"></span> 局限 Limitation</div>
+      <div class="item"><span class="dot" style="background:var(--purple)"></span> 概念 Concept</div>
+      <div style="margin-top:4px;font-size:10px;color:var(--fg3)">
+        <div style="color:var(--accent2)">⇢⇢ 同章上下文</div>
+        <div style="color:var(--fg3);font-style:italic">⇢ 跨章上下文</div>
+        <div style="color:var(--green)">── 支持 supports</div>
+        <div style="color:var(--red)">── 约束 constrains</div>
+        <div style="color:var(--orange)">── 矛盾 contradicts</div>
+        <div style="color:var(--accent)">── 细化 refines</div>
+      </div>
+    </div>`;
+  window._selGraphId=gid;window._selPaperId=pid;
+  loadSeriesGraph();
+}
+async function loadSeriesGraph(){
+  const gid=document.getElementById('sg-select')?.value||window._selGraphId;
+  window._selGraphId=gid;
+  const data=await fetchJSON(API+'graph-full?graph_id='+encodeURIComponent(gid)+(window._selPaperId?'&paper_id='+window._selPaperId:''));
+  document.getElementById('graph-legend').style.display='block';
+  renderForceGraph('graph-viz',data);
 }
 
-function renderClaimList() {
-  const type = $('#claim-filter-type')?.value||'';
-  const claims = (window._claims||[]).filter(c => !type || c.claim_type === type);
-  $('#claim-list').innerHTML = claims.map(c => `
-    <div class="card">
-      <div class="meta">${badge(c.claim_type, 'blue')} ${badge(c.status, c.status==='active'?'green':'yellow')} ${badge(c.importance, 'dim')} · conf: ${(c.extraction_confidence*100).toFixed(0)}%</div>
-      <div class="text">${esc(c.claim_text)}</div>
-      <div class="meta">ID: ${esc(c.claim_id)} · Paper: ${esc(c.paper_id)}</div>
-    </div>`).join('') || '<p style="color:var(--dim)">No claims</p>';
+// ---- Bridge Graph ----
+async function renderBridgeGraph(m){
+  const bridges=await fetchJSON(API+'bridges');
+  if(!bridges.count){m.innerHTML='<div class="empty-state"><div class="icon">🌉</div><p>暂无桥接关系</p><p style="color:var(--fg3)">在不同系列图的概念之间检测到关联时出现</p></div>';return}
+  m.innerHTML=`<h2>桥接图 · 跨图关联 <span style="color:var(--fg2);font-size:14px;font-weight:400">${bridges.count} 条</span></h2>
+    <div class="graph-controls">
+      <select id="bg-filter" onchange="renderBridgeList()">
+        <option value="">全部类型</option>
+        ${[...new Set(bridges.bridges.map(b=>b.bridge_type))].map(t=>`<option>${t}</option>`).join('')}
+      </select>
+      <span style="font-size:11px;color:var(--fg3)">连接不同系列图中的相同/相似概念</span>
+    </div>
+    <div class="graph-container" id="bridge-viz"><div class="empty-state"><div class="icon">⟳</div><p>加载中...</p></div></div>
+    <div class="graph-legend" id="bridge-legend" style="display:none">
+      <div class="item"><span class="dot" style="background:var(--purple)"></span> 概念 (图A)</div>
+      <div class="item"><span class="dot" style="background:var(--accent2)"></span> 概念 (图B)</div>
+      <div style="margin-top:4px;font-size:10px;color:var(--fg3)">
+        <div style="color:var(--accent)">── 相同 same_as</div>
+        <div style="color:var(--accent2)">── 类似 analogous_to</div>
+      </div>
+    </div>`;
+  window._bridges=bridges.bridges;renderBridgeList();
+}
+function renderBridgeList(){
+  const type=document.getElementById('bg-filter')?.value||'';
+  const bs=(window._bridges||[]).filter(b=>!type||b.bridge_type===type);
+  const data=buildBridgeGraphData(bs);
+  document.getElementById('bridge-legend').style.display='block';
+  renderForceGraph('bridge-viz',data,'bridge');
 }
 
-// ---- Sections ----
-async function renderSections(main) {
-  const papers = await fetchJSON(API + 'papers');
-  if (!papers.papers.length) { main.innerHTML='<p>No papers</p>'; return; }
-  const pid = papers.papers[0].paper_id;
-  const secs = await fetchJSON(API + `papers/${pid}/sections`);
-  main.innerHTML = `<h2>Sections</h2>
-    <select id="section-paper" onchange="loadSections()">${papers.papers.map(p => `<option value="${p.paper_id}">${esc(p.title)}</option>`).join('')}</select>
-    <div id="section-list" style="margin-top:12px"></div>`;
-  window._sections = secs.sections;
-  renderSectionList();
+function buildBridgeGraphData(bridges){
+  const nodes=[],edges=[],nids=new Set();
+  bridges.forEach(b=>{
+    const sk=`A:${b.source_key.substring(0,30)}`,tk=`B:${b.target_key.substring(0,30)}`;
+    if(!nids.has(sk)){nids.add(sk);nodes.push({id:sk,label:b.source_key,nType:'concept',graphId:b.source_graph_id,type:'concept'})}
+    if(!nids.has(tk)){nids.add(tk);nodes.push({id:tk,label:b.target_key,nType:'concept',graphId:b.target_graph_id,type:'concept'})}
+    edges.push({source:sk,target:tk,rType:b.bridge_type,importance:b.bridge_confidence||0.5});
+  });
+  return{nodes,links:edges};
 }
 
-async function loadSections() {
-  const pid = $('#section-paper').value;
-  const secs = await fetchJSON(API + `papers/${pid}/sections`);
-  window._sections = secs.sections;
-  renderSectionList();
-}
+// ---- D3 Force Graph ----
+let _zoomTransform=null;
+function resetGraphZoom(){_zoomTransform=null;loadSeriesGraph()}
 
-function renderSectionList() {
-  $('#section-list').innerHTML = (window._sections||[]).map(s => `
-    <div class="card">
-      <h3>${esc(s.heading)}</h3>
-      <div class="meta">${s.heading_path||''} · pp ${s.page_start}-${s.page_end||'?'} · ${badge(s.heading_level, 'dim')}</div>
-      <div class="text">${esc((s.raw_text||'').substring(0,300))}</div>
-    </div>`).join('');
-}
+function renderForceGraph(containerId,data,mode='series'){
+  const box=document.getElementById(containerId);
+  box.innerHTML='';
+  const W=box.clientWidth,H=box.clientHeight||650;
 
-// ---- Concepts ----
-async function renderConcepts(main) {
-  const data = await fetchJSON(API + 'concepts');
-  const byNs = {};
-  data.concepts.forEach(c => { const ns = c.namespace||'other'; if(!byNs[ns]) byNs[ns]=[]; byNs[ns].push(c); });
-  main.innerHTML = `<h2>Concepts (${data.count})</h2><div id="concept-list"></div>`;
-  let html = '';
-  for (const [ns, concepts] of Object.entries(byNs)) {
-    html += `<h3 style="margin-top:16px;color:var(--accent)">${esc(ns)} (${concepts.length})</h3>`;
-    html += concepts.map(c => `
-      <div class="card" style="border-left:3px solid var(--accent)">
-        <h3>${esc(c.label_zh)} <span style="color:var(--dim);font-size:12px">${esc(c.concept_key)}</span></h3>
-        <div class="meta">${badge(c.namespace,'blue')} ${badge(c.status,'green')} · Graph: ${esc(c.graph_id)}</div>
-        <div class="text">${esc(c.definition||'No definition')}</div>
-        ${c.aliases ? `<div class="meta">Aliases: ${esc(c.aliases)}</div>` : ''}
-      </div>`).join('');
+  // Build nodes
+  const nodes=[],nodeMap=new Map();
+  function addNode(id,label,nType,extra={}){
+    if(nodeMap.has(id))return;nodeMap.set(id,true);
+    nodes.push({id,label:label||id,nType,r:getNodeRadius(nType),...extra});
   }
-  $('#concept-list').innerHTML = html;
+  function getNodeRadius(t){
+    if(t==='concept'||t==='claim')return 8;
+    if(t==='evidence')return 5;
+    if(t==='limitation')return 5;
+    return 5;
+  }
+  function getNodeColor(t){
+    if(t==='concept')return'var(--purple)';
+    if(t==='claim')return'var(--accent)';
+    if(t==='evidence')return'var(--accent2)';
+    if(t==='limitation')return'var(--red)';
+    return'var(--fg3)';
+  }
+
+  if(mode==='series'){
+    (data.claims||[]).forEach(c=>addNode(c.claim_id,c.claim_text?.substring(0,60)||c.claim_id,'claim',{fullText:c.claim_text,conf:c.extraction_confidence,ctype:c.claim_type}));
+    (data.evidence||[]).forEach(e=>addNode(e.evidence_id,e.evidence_text?.substring(0,60)||e.evidence_id,'evidence',{fullText:e.evidence_text,strength:e.strength}));
+    (data.limitations||[]).forEach(l=>addNode(l.limitation_id,l.limitation_text?.substring(0,60)||l.limitation_id,'limitation',{fullText:l.limitation_text,severity:l.severity}));
+    (data.concepts||[]).forEach(c=>addNode(c.concept_key,c.label_zh||c.concept_key,'concept',{fullText:c.definition,namespace:c.namespace}));
+  }
+
+  const edges=[];
+  // Typed relations from graph_relations table
+  (data.relations||[]).forEach(r=>{
+    if(nodeMap.has(r.source_id)&&nodeMap.has(r.target_id)){
+      edges.push({source:r.source_id,target:r.target_id,rType:r.relation_type,importance:r.importance||0.5});
+    }
+  });
+  // Claim → Evidence refs
+  (data.claims||[]).forEach(c=>{
+    let refs=[];
+    try{refs=JSON.parse(c.evidence_refs)}catch(e){}
+    refs.forEach(eid=>{if(nodeMap.has(eid))edges.push({source:c.claim_id,target:eid,rType:'supports',importance:0.6})});
+    let lrefs=[];
+    try{lrefs=JSON.parse(c.limitation_refs)}catch(e){}
+    lrefs.forEach(lid=>{if(nodeMap.has(lid))edges.push({source:c.claim_id,target:lid,rType:'constrained_by',importance:0.5})});
+  });
+  // Concept hierarchy
+  (data.concepts||[]).forEach(c=>{
+    let ps=[],cs=[];
+    try{ps=JSON.parse(c.parent_keys)}catch(e){}
+    try{cs=JSON.parse(c.child_keys)}catch(e){}
+    ps.forEach(pk=>{if(nodeMap.has(pk))edges.push({source:pk,target:c.concept_key,rType:'parent_of',importance:0.7})});
+    cs.forEach(ck=>{if(nodeMap.has(ck))edges.push({source:c.concept_key,target:ck,rType:'parent_of',importance:0.7})});
+  });
+
+  // Context edges: connect claims in document order (by section page, then claim order)
+  // Build map: section_id -> page_start
+  const sectionPage=new Map();
+  (data.sections||[]).forEach(s=>sectionPage.set(s.section_id,s.page_start||0));
+  // Sort claims by (section page_start, then natural order)
+  const sortedClaims=[...(data.claims||[])].sort((a,b)=>{
+    const pa=sectionPage.get(a.section_id)||0,pb=sectionPage.get(b.section_id)||0;
+    if(pa!==pb)return pa-pb;
+    return (a.claim_id||'').localeCompare(b.claim_id||'');
+  });
+  // Connect adjacent claims in document order
+  for(let i=0;i<sortedClaims.length-1;i++){
+    const sameSection=sortedClaims[i].section_id===sortedClaims[i+1].section_id;
+    edges.push({
+      source:sortedClaims[i].claim_id,target:sortedClaims[i+1].claim_id,
+      rType:'context',importance:sameSection?0.4:0.25
+    });
+  }
+
+  if(!nodes.length){box.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>该图暂无节点</p><p style="color:var(--fg3)">导入论文并运行抽取后出现</p></div>';return}
+
+  const svg=d3.select('#'+containerId).append('svg').attr('width',W).attr('height',H);
+
+  // Arrow marker definitions
+  const defs=svg.append('defs');
+  const arrowColors={supports:'var(--green)',constrains:'var(--red)',constrained_by:'var(--red)',
+    contradicts:'var(--orange)',refines:'var(--accent)',parent_of:'var(--purple)',
+    child_of:'var(--purple)',same_as:'var(--accent)',analogous_to:'var(--accent2)',related:'var(--fg3)',
+    context:'var(--accent2)'};
+  Object.entries(arrowColors).forEach(([k,v])=>{
+    defs.append('marker').attr('id','arrow-'+k).attr('viewBox','0 -5 10 10')
+      .attr('refX',20).attr('refY',0).attr('markerWidth',6).attr('markerHeight',6)
+      .attr('orient','auto')
+      .append('path').attr('d','M0,-5L10,0L0,5').attr('fill',v).attr('opacity',0.5);
+  });
+
+  const g=svg.append('g');
+
+  // Zoom with trackpad pinch + mouse wheel support
+  const zoom=d3.zoom()
+    .scaleExtent([0.15,8])
+    .on('zoom',e=>g.attr('transform',e.transform));
+  svg.call(zoom);
+  // Custom wheel handler for trackpad compatibility
+  svg.on('wheel.zoom',e=>{
+    e.preventDefault();
+    const tr=d3.zoomTransform(svg.node());
+    const k=tr.k*(1-e.deltaY*0.002);
+    const ck=Math.max(0.15,Math.min(8,k));
+    const mx=e.offsetX,my=e.offsetY;
+    const x=mx-(mx-tr.x)*ck/tr.k;
+    const y=my-(my-tr.y)*ck/tr.k;
+    svg.call(zoom.transform,d3.zoomIdentity.translate(x,y).scale(ck));
+  },{passive:false});
+  if(_zoomTransform)svg.call(zoom.transform,_zoomTransform);
+
+  // Edge color
+  function edgeColor(t){
+    if(t==='supports')return'var(--green)';
+    if(t==='constrains'||t==='constrained_by')return'var(--red)';
+    if(t==='contradicts')return'var(--orange)';
+    if(t==='refines')return'var(--accent)';
+    if(t==='parent_of'||t==='child_of')return'var(--purple)';
+    if(t==='same_as')return'var(--accent)';
+    if(t==='analogous_to')return'var(--accent2)';
+    if(t==='context')return'var(--accent2)';
+    return'var(--fg3)';
+  }
+
+  // Links with arrows
+  const link=g.append('g').selectAll('line').data(edges).join('line')
+    .attr('stroke',d=>edgeColor(d.rType))
+    .attr('stroke-width',d=>d.rType==='context'?(d.importance>0.3?2.5:1.2):0.5+(d.importance||0.5)*2)
+    .attr('stroke-opacity',d=>d.rType==='context'?(d.importance>0.3?0.5:0.2):0.35)
+    .attr('stroke-dasharray',d=>d.rType==='context'?'8,4':d.rType==='contradicts'?'6,3':null)
+    .attr('marker-end',d=>'url(#arrow-'+d.rType+')');
+
+  // Nodes
+  const node=g.append('g').selectAll('g').data(nodes).join('g')
+    .attr('cursor','pointer');
+
+  node.append('circle')
+    .attr('r',d=>d.r)
+    .attr('fill',d=>getNodeColor(d.nType))
+    .attr('fill-opacity',0.85)
+    .attr('stroke',d=>getNodeColor(d.nType))
+    .attr('stroke-opacity',0.6)
+    .attr('stroke-width',1);
+
+  // Labels for larger nodes
+  node.filter(d=>d.r>=6).append('text')
+    .text(d=>(d.label||'').substring(0,25))
+    .attr('x',d=>d.r+4).attr('y',3)
+    .attr('font-size','10px').attr('fill','var(--fg2)')
+    .attr('font-family','var(--font)');
+
+  // Tooltip
+  const tip=d3.select('#'+containerId).append('div').attr('class','graph-tooltip');
+  node.on('mouseover',(e,d)=>{
+    tip.style('display','block')
+      .html(`<div class="tt-type" style="color:${getNodeColor(d.nType)}">${d.nType.toUpperCase()}</div>
+        <div style="font-weight:600;margin-bottom:2px">${esc((d.label||'').substring(0,80))}</div>
+        ${d.fullText?`<div class="tt-text">${esc(d.fullText.substring(0,150))}</div>`:''}
+        ${d.conf!==undefined?`<div style="font-size:10px;color:var(--fg2);margin-top:2px">置信度: ${(d.conf*100).toFixed(0)}%</div>`:''}
+        ${d.ctype?`<div style="font-size:10px;color:var(--fg2)">类型: ${esc(d.ctype)}</div>`:''}
+        ${d.strength?`<div style="font-size:10px;color:var(--fg2)">强度: ${esc(d.strength)}</div>`:''}
+        ${d.severity?`<div style="font-size:10px;color:var(--fg2)">严重度: ${esc(d.severity)}</div>`:''}`);
+  }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
+    .on('mouseout',()=>tip.style('display','none'));
+
+  // Force simulation
+  const sim=d3.forceSimulation(nodes)
+    .force('link',d3.forceLink(edges).id(d=>d.id).distance(d=>60+(1-(d.importance||0.5))*60))
+    .force('charge',d3.forceManyBody().strength(-200))
+    .force('center',d3.forceCenter(W/2,H/2))
+    .force('collision',d3.forceCollide().radius(d=>d.r+8))
+    .on('tick',()=>{
+      link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
+        .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
+      node.attr('transform',d=>`translate(${d.x},${d.y})`);
+    });
+
+  // Save zoom state
+  svg.on('wheel.zoom',null); // Let d3 handle it
+  const origEnd=zoom.on('end');
+  zoom.on('end',e=>{_zoomTransform=e.transform});
 }
 
 // ---- Inbox ----
-async function renderInbox(main) {
-  const data = await fetchJSON(API + 'inbox');
-  main.innerHTML = `<h2>Review Inbox (${data.count} pending)</h2>
-    <div style="margin-bottom:12px">
-      <select id="inbox-filter" onchange="renderInboxList()">
-        <option value="">All types</option>
-        <option value="extraction">Extraction</option>
-        <option value="concept">Concept</option>
-        <option value="bridge">Bridge</option>
-        <option value="conflict">Conflict</option>
-      </select>
+async function renderInbox(m){
+  const data=await fetchJSON(API+'inbox');
+  m.innerHTML=`<h2>审核队列 <span style="color:var(--fg2);font-size:14px;font-weight:400">${data.count} 项待审</span></h2>
+    <div style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <select id="if" onchange="renderInboxList()"><option value="">全部类型</option><option value="extraction">抽取</option><option value="concept">概念</option><option value="bridge">桥接</option><option value="conflict">冲突</option></select>
+      <button class="btn btn-success btn-sm" onclick="batchApprove()">✓ 批量通过</button>
     </div>
     <div id="inbox-list"></div>`;
-  window._inbox = data.items;
-  renderInboxList();
+  window._inbox=data.items;renderInboxList();
 }
-
-function renderInboxList() {
-  const type = $('#inbox-filter')?.value||'';
-  const items = (window._inbox||[]).filter(i => !type || i.inbox_type === type);
-  const prioClass = {'critical':'high','high':'high','medium':'medium','low':'low'};
-  $('#inbox-list').innerHTML = items.map(i => `
-    <div class="inbox-item ${prioClass[i.priority]||'low'}">
+async function batchApprove(){
+  if(!confirm('确定要通过所有待审核项？'))return;
+  const items=window._inbox||[];
+  let ok=0;
+  for(let i of items){
+    try{
+      await fetch(API+'inbox/'+i.inbox_id+'/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      ok++;
+    }catch(e){}
+  }
+  toast('通过 '+ok+'/'+items.length+' 项',true);
+  loadPanel('inbox');
+}
+function renderInboxList(){
+  const type=document.getElementById('if')?.value||'';
+  const items=(window._inbox||[]).filter(i=>!type||i.inbox_type===type);
+  const pc={critical:'critical',high:'high',medium:'medium',low:'low'};
+  document.getElementById('inbox-list').innerHTML=items.map(i=>`
+    <div class="inbox-item ${pc[i.priority]||'low'}">
       <div style="display:flex;justify-content:space-between;align-items:start">
         <div>
           <strong>${esc(i.title)}</strong>
-          <div class="meta">${badge(i.inbox_type,'blue')} ${badge(i.item_type,'dim')} ${badge(i.priority, prioClass[i.priority]||'dim')} · conf: ${(i.extraction_confidence*100).toFixed(0)}%</div>
-          <div class="text">${esc(i.description||i.source_text||'')}</div>
+          <div class="meta">${badge(i.inbox_type,'blue')} ${badge(i.item_type,'dim')} ${badge(i.priority,pc[i.priority]==='high'?'red':pc[i.priority]==='medium'?'orange':'dim')} · ${(i.extraction_confidence*100).toFixed(0)}%</div>
+          <div class="text">${esc((i.description||i.source_text||'').substring(0,200))}</div>
         </div>
         <div class="actions" style="flex-shrink:0">
-          <button onclick="inboxAction('${i.inbox_id}','approve')">&#10003; Approve</button>
-          <button class="danger" onclick="inboxAction('${i.inbox_id}','reject')">&#10007; Reject</button>
-          <button onclick="inboxAction('${i.inbox_id}','downgrade')">&darr; Lower Conf</button>
+          <button class="btn btn-sm btn-success" onclick="inboxAct('${i.inbox_id}','approve')">✓ 通过</button>
+          <button class="btn btn-sm btn-danger" onclick="inboxAct('${i.inbox_id}','reject')">✗ 拒绝</button>
+          <button class="btn btn-sm" onclick="inboxAct('${i.inbox_id}','downgrade')">↓ 降级</button>
         </div>
       </div>
-    </div>`).join('') || '<p style="color:var(--dim)">No pending items</p>';
+    </div>`).join('')||'<p style="color:var(--fg3)">暂无待审核项</p>';
 }
-
-async function inboxAction(inboxId, action) {
-  const notes = prompt('Notes (optional):')||'';
-  const endpoint = action === 'downgrade' ? `inbox/${inboxId}/downgrade` :
-                   action === 'approve' ? `inbox/${inboxId}/approve` :
-                   `inbox/${inboxId}/reject`;
-  try {
-    const body = action === 'reject' || action === 'downgrade' ? { reason: notes } : undefined;
-    const r = await fetch(API + endpoint, { method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: body ? JSON.stringify(body) : '{}' });
-    if (r.ok) { alert('Done!'); loadPanel('inbox'); }
-    else { alert('Failed: ' + (await r.json()).detail); }
-  } catch(e) { alert('Error: ' + e.message); }
-}
-
-// ---- Bridges ----
-async function renderBridges(main) {
-  const data = await fetchJSON(API + 'bridges');
-  main.innerHTML = `<h2>Bridge Relations (${data.count})</h2>
-    <div style="margin-bottom:12px">
-      <select id="bridge-filter" onchange="renderBridgeList()">
-        <option value="">All types</option>
-        ${[...new Set(data.bridges.map(b=>b.bridge_type))].map(t=>`<option>${t}</option>`).join('')}
-      </select>
-    </div>
-    <div id="bridge-list"></div>`;
-  window._bridges = data.bridges;
-  renderBridgeList();
-}
-
-function renderBridgeList() {
-  const type = $('#bridge-filter')?.value||'';
-  const bridges = (window._bridges||[]).filter(b => !type || b.bridge_type === type);
-  $('#bridge-list').innerHTML = bridges.map(b => {
-    const statusMap = {active:'green',candidate:'yellow',rejected:'red'};
-    return `
-    <div class="card">
-      <h3>${badge(b.bridge_type,'blue')} ${badge(b.review_status, statusMap[b.review_status]||'dim')}</h3>
-      <div class="meta">${esc(b.source_key)} (graph: ${esc(b.source_graph_id)}) &harr; ${esc(b.target_key)} (graph: ${esc(b.target_graph_id)})</div>
-      <div class="meta">Confidence: ${(b.bridge_confidence*100).toFixed(0)}% · Cost: ${b.traversal_cost}</div>
-      ${b.warning ? `<div class="text" style="color:var(--yellow)">Warning: ${esc(b.warning)}</div>` : ''}
-    </div>`;
-  }).join('') || '<p style="color:var(--dim)">No bridges</p>';
-}
-
-// ---- Traces ----
-async function renderTraces(main) {
-  const data = await fetchJSON(API + 'traces');
-  main.innerHTML = `<h2>Traversal Traces (${data.count})</h2><div id="trace-list"></div>`;
-  window._traces = data.traces;
-  $('#trace-list').innerHTML = data.traces.map(t => `
-    <div class="card" onclick="viewTrace('${t.trace_id}')" style="cursor:pointer">
-      <h3>${esc(t.query.substring(0,80))}</h3>
-      <div class="meta">${esc(t.trace_id)} · ${t.created_at}</div>
-    </div>`).join('') || '<p style="color:var(--dim)">No traces</p>';
-}
-
-async function viewTrace(tid) {
-  const t = await fetchJSON(API + `traces/${tid}`);
-  const main = $('#content');
-  main.innerHTML = `<h2>Trace: ${esc(t.query)}</h2>
-    <button onclick="loadPanel('traces')" style="margin-bottom:12px">&larr; Back</button>
-    <h3>Plan</h3><pre>${esc(JSON.stringify(t.plan,null,2))}</pre>
-    <h3>Result Summary</h3>
-    <p>Nodes visited: ${(t.result?.visited_nodes||[]).length} · Edges: ${(t.result?.visited_edges||[]).length}</p>
-    <p>Stopped: ${esc(t.result?.stopped_reason||'')} · Cost: ${t.result?.total_traversal_cost||0}</p>
-    <h3>Visited Nodes</h3>
-    ${(t.result?.visited_nodes||[]).slice(0,30).map(n => `
-      <div class="card"><strong>${esc(n.node_type)}</strong>: ${esc(n.title||n.text||'').substring(0,200)}</div>`).join('')}
-    <h3>PromptPacket Preview</h3><pre>${esc(JSON.stringify(t.result,null,2).substring(0,5000))}</pre>`;
-}
-
-// ---- Series ----
-async function renderSeries(main) {
-  const data = await fetchJSON(API + 'series-groups');
-  main.innerHTML = `<h2>Series Groups (${data.count})</h2><div id="series-list"></div>`;
-  $('#series-list').innerHTML = data.groups.map(g => `
-    <div class="card">
-      <h3>${esc(g.name)}</h3>
-      <div class="meta">Domain: ${esc(g.domain)} · Confidence: ${(g.confidence*100).toFixed(0)}%</div>
-      <div class="meta">Graphs: ${esc(JSON.stringify(g.graph_ids))}</div>
-      <div class="text">${esc(g.description||'')}</div>
-    </div>`).join('') || '<p style="color:var(--dim)">No series groups</p>';
+async function inboxAct(id,action){
+  const notes=prompt('备注（选填）:')||'';
+  const ep=action==='downgrade'?`inbox/${id}/downgrade`:action==='approve'?`inbox/${id}/approve`:`inbox/${id}/reject`;
+  try{
+    const body=action==='reject'||action==='downgrade'?{reason:notes}:undefined;
+    const r=await fetch(API+ep,{method:'POST',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):'{}'});
+    if(r.ok){toast('操作成功',true);loadPanel('inbox')}else{toast('失败: '+((await r.json()).detail),false)}
+  }catch(e){toast(e.message,false)}
 }
 
 // ---- Stats ----
-async function renderStats(main) {
-  const stats = await fetchJSON(API + 'stats');
-  main.innerHTML = `<h2>Database Statistics</h2>
-    <div class="stats">${Object.entries(stats).map(([k,v]) => `
-      <div class="stat"><div class="num">${v}</div><div class="label">${esc(k)}</div></div>`).join('')}
-    </div>`;
+async function renderStats(m){
+  const stats=await fetchJSON(API+'stats');
+  const labels={corpora:'语料库',series_graphs:'系列图',paper_cards:'论文',section_blocks:'章节',source_spans:'原文片段',claim_blocks:'论点',evidence_blocks:'证据',limitation_blocks:'局限',concept_keys:'概念',graph_relations:'图关系',bridge_relations:'桥接',extraction_runs:'抽取运行',review_inbox:'待审核'};
+  m.innerHTML=`<h2>数据库统计</h2>
+    <div class="stats-grid">${Object.entries(stats).map(([k,v])=>`<div class="stat-card"><div class="num">${v}</div><div class="label">${labels[k]||k}</div></div>`).join('')}</div>`;
 }
 
 // ---- Init ----
 loadPanel('papers');
-
-// Auto-refresh stats summary
 (async function(){
-  try {
-    const stats = await fetchJSON(API + 'stats');
-    $('#stat-summary').textContent = `${stats.paper_cards||0} papers · ${stats.claim_blocks||0} claims · ${stats.review_inbox||0} inbox`;
-  } catch(e) {}
+  try{const s=await fetchJSON(API+'stats');document.getElementById('stat-summary').textContent=`${s.paper_cards||0} 篇论文 · ${s.claim_blocks||0} 论点 · ${s.review_inbox||0} 待审`}catch(e){}
 })();
 </script>
 </body>

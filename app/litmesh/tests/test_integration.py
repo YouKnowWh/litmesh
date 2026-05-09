@@ -39,6 +39,9 @@ from app.litmesh.models.relation import GraphRelation, GraphRelationType
 from app.litmesh.models.extraction_run import ExtractionRun, ExtractionTarget, ExtractionStatus
 from app.litmesh.models.review import ReviewInboxItem, InboxType, InboxDecision, InboxPriority
 from app.litmesh.storage.sqlite import LitMeshDB
+from app.litmesh.extraction.concept_extractor import ConceptExtractor
+from app.litmesh.ingestion.section_splitter import split_sections
+from app.litmesh.ingestion.pipeline import IngestionPipeline
 
 
 # ============================================================
@@ -101,23 +104,23 @@ def paper(db, graph):
 
 @pytest.fixture
 def sections(db, graph, paper):
-    """Create test sections simulating a real paper structure."""
+    """Create paragraph-level SectionBlocks simulating a real paper structure."""
     secs = [
         SectionBlock(
             graph_id=graph.graph_id,
             paper_id=paper.paper_id,
-            heading="引言",
-            heading_path=["引言"],
-            heading_level=HeadingLevel.SECTION,
+            heading="引言 P1",
+            heading_path=["引言", "P1"],
+            heading_level=HeadingLevel.PARAGRAPH_GROUP,
             raw_text="AIGC技术正在重塑教育范式。本文提出了一个整合认知、实践与伦理的三维框架。",
             page_start=1, page_end=2,
         ),
         SectionBlock(
             graph_id=graph.graph_id,
             paper_id=paper.paper_id,
-            heading="CPE-3DF框架设计",
-            heading_path=["CPE-3DF框架设计"],
-            heading_level=HeadingLevel.SECTION,
+            heading="CPE-3DF框架设计 P1",
+            heading_path=["CPE-3DF框架设计", "P1"],
+            heading_level=HeadingLevel.PARAGRAPH_GROUP,
             raw_text=(
                 "CPE-3DF框架包含三个维度：认知（Cognitive）、实践（Practice）、伦理（Ethics）。"
                 "认知维度关注AI对学习过程的影响。实践维度关注AI工具的应用。"
@@ -129,9 +132,9 @@ def sections(db, graph, paper):
         SectionBlock(
             graph_id=graph.graph_id,
             paper_id=paper.paper_id,
-            heading="实验验证",
-            heading_path=["实验验证"],
-            heading_level=HeadingLevel.SECTION,
+            heading="实验验证 P1",
+            heading_path=["实验验证", "P1"],
+            heading_level=HeadingLevel.PARAGRAPH_GROUP,
             raw_text=(
                 "我们在三所大学的生物工程专业进行了为期一学期的对照实验。"
                 "实验组（n=120）使用AIGC辅助教学，对照组（n=100）使用传统教学。"
@@ -144,9 +147,9 @@ def sections(db, graph, paper):
         SectionBlock(
             graph_id=graph.graph_id,
             paper_id=paper.paper_id,
-            heading="伦理风险分析",
-            heading_path=["伦理风险分析"],
-            heading_level=HeadingLevel.SECTION,
+            heading="伦理风险分析 P1",
+            heading_path=["伦理风险分析", "P1"],
+            heading_level=HeadingLevel.PARAGRAPH_GROUP,
             raw_text=(
                 "AI幻觉是AIGC教育中最突出的伦理风险之一。当AI生成错误信息时，"
                 "学生可能无法辨别真伪，导致知识污染。此外，过度依赖AI可能导致"
@@ -190,8 +193,38 @@ class TestV01StructureImport:
 
     def test_section_creation(self, sections):
         assert len(sections) == 4
-        assert sections[0].heading == "引言"
+        assert sections[0].heading == "引言 P1"
+        assert sections[0].heading_level == HeadingLevel.PARAGRAPH_GROUP
+        assert sections[0].heading_path == ["引言", "P1"]
         assert "CPE-3DF" in sections[1].raw_text
+
+    def test_split_sections_creates_paragraph_blocks(self, graph, paper):
+        full_text = (
+            "引言\n"
+            "AIGC技术正在重塑教育范式。本文提出了一个整合认知、实践与伦理的三维框架。\n\n"
+            "CPE-3DF框架设计\n"
+            "CPE-3DF框架包含三个维度：认知、实践、伦理。\n\n"
+            "该框架的核心主张是：AI教育必须在三个层面同时推进。\n\n"
+            "伦理风险分析\n"
+            "AI幻觉和数据隐私是AIGC教育中的关键风险。"
+        )
+        blocks = split_sections(
+            full_text=full_text,
+            paper_id=paper.paper_id,
+            graph_id=graph.graph_id,
+            pages=[{"page_num": 1, "text": full_text}],
+            min_section_chars=10,
+        )
+
+        assert [b.heading for b in blocks] == [
+            "引言 P1",
+            "CPE-3DF框架设计 P1",
+            "CPE-3DF框架设计 P2",
+            "伦理风险分析 P1",
+        ]
+        assert all(b.heading_level == HeadingLevel.PARAGRAPH_GROUP for b in blocks)
+        assert blocks[1].heading_path == ["CPE-3DF框架设计", "P1"]
+        assert blocks[2].prev_section_id == blocks[1].section_id
 
     def test_section_navigation_links(self, sections):
         """Sections should have prev/next/parent link fields available."""
@@ -405,6 +438,40 @@ class TestConceptKey:
             db.insert_concept(concept)
             assert concept.namespace == ns
 
+    def test_concept_extractor_rejects_copied_sentence_terms(self, graph):
+        """ConceptKey generation should reject sentence-like copied keywords."""
+        class FakeLLM:
+            def complete(self, prompt):
+                return json.dumps([
+                    {
+                        "concept_term": "该框架的核心主张是AI教育必须在认知实践伦理三个层面同时推进",
+                        "english_term": "",
+                        "namespace": "concept",
+                        "definition": "bad long phrase",
+                        "aliases": [],
+                    },
+                    {
+                        "concept_term": "认知负荷",
+                        "english_term": "cognitive load",
+                        "namespace": "concept",
+                        "definition": "学习任务对认知资源的要求",
+                        "aliases": ["认知负荷"],
+                    },
+                ], ensure_ascii=False)
+
+        claim = ClaimBlock(
+            graph_id=graph.graph_id,
+            paper_id="paper_fake",
+            claim_text="AI可能改变学生的认知负荷。",
+        )
+        concepts = ConceptExtractor(FakeLLM()).extract_from_claims(
+            [claim], graph.graph_id, "run_fake"
+        )
+
+        assert len(concepts) == 1
+        assert concepts[0].concept_key == "concept:cognitive_load"
+        assert concepts[0].label_zh == "认知负荷"
+
 
 # ============================================================
 # GraphRelation Tests
@@ -452,6 +519,39 @@ class TestGraphRelation:
         )
         db.insert_relation(rel)
         assert rel.relation_type == GraphRelationType.CONTRADICTS
+
+    def test_section_context_arrows_are_typed_relations(self, db, graph, paper, sections):
+        """Section prev/parent pointers should also be traversable typed edges."""
+        first, second = sections[0], sections[1]
+        db.insert_relation(GraphRelation(
+            graph_id=graph.graph_id,
+            source_id=first.section_id,
+            target_id=second.section_id,
+            source_type="section",
+            target_type="section",
+            relation_type=GraphRelationType.NEXT,
+            confidence=1.0,
+        ))
+
+        rels = db.get_relations_from(first.section_id, "section_next")
+        assert len(rels) == 1
+        assert rels[0]["target_id"] == second.section_id
+
+    def test_argument_block_belongs_to_source_section(self, db, graph, paper, sections):
+        """Claims should have a typed pointer back to their source section."""
+        pipeline = IngestionPipeline(db, llm_client=None, graph_id=graph.graph_id)
+        claim = ClaimBlock(
+            graph_id=graph.graph_id,
+            paper_id=paper.paper_id,
+            section_id=sections[1].section_id,
+            claim_text="AI教育必须在认知、实践和伦理三个层面同时推进。",
+        )
+        db.insert_claim(claim)
+        pipeline._link_block_to_section(claim.claim_id, "claim", claim.section_id)
+
+        rels = db.get_relations_from(claim.claim_id, "belongs_to")
+        assert len(rels) == 1
+        assert rels[0]["target_id"] == sections[1].section_id
 
 
 # ============================================================

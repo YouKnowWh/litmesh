@@ -13,6 +13,7 @@ from ..models.graph import SeriesGraph, GraphType, CrossGraphPolicy
 from ..models.corpus import CorpusCard, CorpusType, IntegrationPolicy
 from ..models.extraction_run import ExtractionRun, ExtractionTarget, ExtractionStatus
 from ..models.review import ReviewInboxItem, InboxType, InboxPriority, InboxDecision
+from ..models.relation import GraphRelation, GraphRelationType
 
 from .pdf_parser import PDFExtractor
 from .metadata_extractor import MetadataExtractor
@@ -104,8 +105,43 @@ class IngestionPipeline:
             graph_id=self.graph_id,
             pages=result["pages"],
         )
-        for section in sections:
+        for i, section in enumerate(sections):
             self.db.insert_section(section)
+
+        # Link next_section_id after all sections exist
+        for i in range(len(sections) - 1):
+            self.db.conn.execute(
+                "UPDATE section_blocks SET next_section_id = ? WHERE section_id = ?",
+                (sections[i + 1].section_id, sections[i].section_id)
+            )
+            self.db.insert_relation(GraphRelation(
+                graph_id=self.graph_id,
+                source_id=sections[i].section_id,
+                target_id=sections[i + 1].section_id,
+                source_type="section",
+                target_type="section",
+                relation_type=GraphRelationType.NEXT,
+                confidence=1.0,
+                importance=0.4,
+                traversal_cost=0.2,
+                evidence_json='{"source":"section_splitter"}',
+            ))
+
+        for section in sections:
+            if section.parent_section_id:
+                self.db.insert_relation(GraphRelation(
+                    graph_id=self.graph_id,
+                    source_id=section.section_id,
+                    target_id=section.parent_section_id,
+                    source_type="section",
+                    target_type="section",
+                    relation_type=GraphRelationType.PARENT,
+                    confidence=1.0,
+                    importance=0.5,
+                    traversal_cost=0.2,
+                    evidence_json='{"source":"section_splitter"}',
+                ))
+        self.db.conn.commit()
 
         # 5. Detect series membership
         series_info = self._detect_series(paper_card)
@@ -147,6 +183,12 @@ class IngestionPipeline:
             claims = claim_extractor.extract_from_section(section, extraction_run_id=claim_run.run_id)
             for claim in claims:
                 self.db.insert_claim(claim)
+                self._link_block_to_section(
+                    block_id=claim.claim_id,
+                    block_type="claim",
+                    section_id=claim.section_id,
+                    extraction_run_id=claim_run.run_id,
+                )
                 self._add_to_inbox(claim, paper_id, InboxType.EXTRACTION)
                 all_claims.append(claim)
                 stats["claims"] += 1
@@ -164,6 +206,12 @@ class IngestionPipeline:
                 section_claims = [c for c in all_claims if c.section_id == s["section_id"]]
                 for ev in evidence_extractor.extract_for_claims(section, section_claims, ev_run.run_id):
                     self.db.insert_evidence(ev)
+                    self._link_block_to_section(
+                        block_id=ev.evidence_id,
+                        block_type="evidence",
+                        section_id=ev.section_id,
+                        extraction_run_id=ev_run.run_id,
+                    )
                     self._add_to_inbox(ev, paper_id, InboxType.EXTRACTION)
                     all_evidence.append(ev)
                     stats["evidence"] += 1
@@ -183,6 +231,12 @@ class IngestionPipeline:
                 section_claims = [c for c in all_claims if c.section_id == s["section_id"]]
                 for lim in limitation_extractor.extract_for_claims(section, section_claims, lim_run.run_id):
                     self.db.insert_limitation(lim)
+                    self._link_block_to_section(
+                        block_id=lim.limitation_id,
+                        block_type="limitation",
+                        section_id=lim.section_id,
+                        extraction_run_id=lim_run.run_id,
+                    )
                     self._add_to_inbox(lim, paper_id, InboxType.EXTRACTION)
                     all_limitations.append(lim)
                     stats["limitations"] += 1
@@ -221,6 +275,30 @@ class IngestionPipeline:
                 stats["relations"] += 1
 
         return stats
+
+    def _link_block_to_section(
+        self,
+        block_id: str,
+        block_type: str,
+        section_id: str | None,
+        extraction_run_id: str | None = None,
+    ):
+        """Create the structural pointer back to the source section."""
+        if not section_id:
+            return
+        self.db.insert_relation(GraphRelation(
+            graph_id=self.graph_id,
+            source_id=block_id,
+            target_id=section_id,
+            source_type=block_type,
+            target_type="section",
+            relation_type=GraphRelationType.BELONGS_TO,
+            confidence=1.0,
+            importance=0.6,
+            traversal_cost=0.1,
+            extraction_run_id=extraction_run_id,
+            evidence_json='{"source":"ingestion_pipeline"}',
+        ))
 
     def run_full(self, pdf_path: str) -> dict:
         """Run v0.1 + v0.2 for a single PDF."""

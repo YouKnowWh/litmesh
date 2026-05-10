@@ -87,6 +87,8 @@ class RemoteMarkdownAdapter:
         existing = _find_markdown_source(source)
         if existing:
             markdown = existing.read_text(encoding="utf-8", errors="ignore")
+            if self.progress_callback:
+                self.progress_callback(1, 1)
             return _document_from_markdown(markdown, source, existing, self.name)
 
         endpoint = os.getenv("LITMESH_MINERU_API_URL", "").strip()
@@ -94,15 +96,48 @@ class RemoteMarkdownAdapter:
             raise ImportError("LITMESH_MINERU_API_URL is not configured")
 
         import httpx
+        import logging
+        import threading
+        logger = logging.getLogger("litmesh.parser")
 
-        timeout = float(os.getenv("LITMESH_MINERU_API_TIMEOUT", "1800"))
-        with source.open("rb") as f:
-            response = httpx.post(
-                endpoint,
-                files={"file": (source.name, f, "application/pdf")},
-                timeout=timeout,
-            )
-        response.raise_for_status()
+        file_size = source.stat().st_size
+        logger.info("mineru_api start: file=%s size=%dKB", source.name, file_size // 1024)
+
+        # Heartbeat thread: report elapsed time while waiting for the API
+        heartbeat_stop = threading.Event()
+        heartbeat_start = [0.0]  # mutable closure
+
+        def _heartbeat():
+            import time as _time
+            heartbeat_start[0] = _time.monotonic()
+            interval = 15.0  # report every 15 seconds
+            while not heartbeat_stop.is_set():
+                heartbeat_stop.wait(interval)
+                if not heartbeat_stop.is_set() and self.progress_callback:
+                    elapsed = int(_time.monotonic() - heartbeat_start[0])
+                    # Report as a page-like progress: -elapsed means "waiting, N seconds"
+                    self.progress_callback(-1, elapsed)
+
+        heartbeat = threading.Thread(target=_heartbeat, daemon=True)
+        heartbeat.start()
+
+        try:
+            timeout = float(os.getenv("LITMESH_MINERU_API_TIMEOUT", "1800"))
+            with source.open("rb") as f:
+                response = httpx.post(
+                    endpoint,
+                    files={"file": (source.name, f, "application/pdf")},
+                    timeout=timeout,
+                )
+            response.raise_for_status()
+            dt = time.monotonic() - heartbeat_start[0] if heartbeat_start[0] else 0
+            logger.info("mineru_api done: file=%s time=%.1fs", source.name, dt)
+            if self.progress_callback:
+                self.progress_callback(1, 1)
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
+
         markdown = _markdown_from_response(response)
         if not markdown.strip():
             raise RuntimeError("Remote MinerU API returned empty markdown")

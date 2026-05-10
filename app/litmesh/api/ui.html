@@ -377,7 +377,14 @@ function renderPaperList(){
   el.innerHTML=ps.map(p=>{
     const isProcessing = p.main_framework === 'processing';
     if (isProcessing) {
-      return '<div class="card card-pending"><h3>'+esc(p.title)+' <span class="badge bg-orange" style="animation:pulse 1.5s ease-in-out infinite">处理中</span></h3>'
+      // Find the active task for this paper to enable SSE updates
+      const tasks = window._pendingTasks || {};
+      let taskId = '';
+      for (const [tid, t] of Object.entries(tasks)) {
+        if (t.paperId === p.paper_id) { taskId = tid; break; }
+      }
+      const cardId = taskId ? 'id="task-'+taskId+'"' : '';
+      return '<div class="card card-pending" '+cardId+'><h3>'+esc(p.title)+' <span class="badge bg-orange" style="animation:pulse 1.5s ease-in-out infinite">处理中</span></h3>'
         +'<div class="task-progress"><div class="tp-bar"><div class="tp-fill" style="width:30%;background:linear-gradient(90deg,var(--orange),var(--accent))"></div></div>'
         +'<div class="tp-info"><span class="tp-stage">后台处理中</span><span class="tp-pct">...</span></div></div>'
         +'<div class="meta">处理完成后将显示详细信息</div></div>';

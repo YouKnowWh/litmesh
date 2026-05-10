@@ -97,11 +97,13 @@ class LLMPageSegmenter:
         fallback_segmenter: PageTextSegmenter | None = None,
         paper_id: str = "",
         audit_dir: str = "",
+        progress_callback: Any = None,
     ):
         self.llm = llm_client
         self.config = config or LLMPageSegmenterConfig()
         self.fallback = fallback_segmenter or PageTextSegmenter(SegmenterConfig())
         self.paper_id = paper_id
+        self.progress_callback = progress_callback
         self._audit_path = None
         self._audit_lock = None
         if audit_dir and paper_id:
@@ -155,8 +157,13 @@ class LLMPageSegmenter:
                 results_by_idx[idx] = result
 
         # Assemble in window order
+        total_windows = len(windows)
+        completed_windows = 0
         for idx in sorted(results_by_idx.keys()):
             result = results_by_idx[idx]
+            completed_windows += 1
+            if self.progress_callback:
+                self.progress_callback(completed_windows, total_windows)
             window_text = result["window_text"]
             page_nums = result["page_nums"]
             llm_total_time_ms += result.get("duration_ms", 0)

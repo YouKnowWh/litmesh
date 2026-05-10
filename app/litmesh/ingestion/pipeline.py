@@ -108,10 +108,23 @@ class IngestionPipeline:
         # 1. Parse PDF into a unified document structure.
         logger.info("v0.1 start: pdf=%s existing_paper=%s", pdf_path, is_existing)
         self._emit("parsing", "Parsing PDF...", 5.0)
-        last_reported = [0]  # mutable closure for tracking last reported page
+        last_reported = [0]  # mutable closure
         def _parse_progress(current, total):
+            if current < 0:
+                # Heartbeat: remote API waiting, total = elapsed seconds
+                self._emit("parsing", f"PDF sent to remote server, waiting... ({total}s)", 8.0,
+                           elapsed_s=total)
+                return
+            if total <= 100:
+                # Window-level progress from LLM segmenter
+                pct = 8.0 + (current / max(total, 1)) * 5.0
+                if current - last_reported[0] >= max(1, total // 10) or current == total:
+                    self._emit("parsing", f"Segmenting text: window {current}/{total}", pct,
+                               window=current, total_windows=total)
+                    last_reported[0] = current
+                return
+            # Page-level progress from pdfplumber/PyMuPDF
             pct = 5.0 + (current / max(total, 1)) * 10.0
-            # Only emit meaningful changes to avoid flooding
             if current - last_reported[0] >= max(1, total // 20) or current == total:
                 self._emit("parsing", f"Parsing PDF: page {current}/{total}", pct,
                            current=current, total=total)

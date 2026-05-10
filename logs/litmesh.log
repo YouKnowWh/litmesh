@@ -2625,3 +2625,13 @@ NameError: name 'claim_run' is not defined
 2026-05-10 09:56:24 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'default']
 2026-05-10 09:56:24 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
 2026-05-10 09:56:24 [INFO] litmesh: LitMesh ready
+2026-05-10 10:05:20 [INFO] litmesh: LitMesh starting up
+2026-05-10 10:05:20 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-10 10:05:20 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'default']
+2026-05-10 10:05:20 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-10 10:05:20 [INFO] litmesh: LitMesh ready
+2026-05-10 10:06:44 [INFO] litmesh: LitMesh starting up
+2026-05-10 10:06:44 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-10 10:06:44 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'default']
+2026-05-10 10:06:44 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-10 10:06:44 [INFO] litmesh: LitMesh ready

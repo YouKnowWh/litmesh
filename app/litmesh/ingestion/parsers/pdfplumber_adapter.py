@@ -101,15 +101,16 @@ class PdfPlumberAdapter:
         )
 
     def _make_segmenter(self):
+        seg_cb = self.progress_callback if self.progress_callback else None
         if self.segmenter_name == "rule":
             return PageTextSegmenter(SegmenterConfig())
         if self.segmenter_name in ("llm", "hybrid"):
             return LLMPageSegmenter(self.segment_llm_client, paper_id=self.paper_id,
-                                    audit_dir=self.audit_dir)
+                                    audit_dir=self.audit_dir, progress_callback=seg_cb)
         if self.segmenter_name == "auto":
             has_key = bool(getattr(self.segment_llm_client, "api_key", ""))
             if has_key:
                 return LLMPageSegmenter(self.segment_llm_client, paper_id=self.paper_id,
-                                        audit_dir=self.audit_dir)
+                                        audit_dir=self.audit_dir, progress_callback=seg_cb)
             return PageTextSegmenter(SegmenterConfig())
         raise ValueError("Unknown segmenter. Supported: auto, rule, llm")

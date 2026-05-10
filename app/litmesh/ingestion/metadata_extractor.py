@@ -74,14 +74,14 @@ class MetadataExtractor:
 
         return PaperCard(
             graph_id=graph_id,
-            title=metadata.get("title", source_file),
-            authors=metadata.get("authors", []),
+            title=metadata.get("title") or source_file,
+            authors=metadata.get("authors") or [],
             year=metadata.get("year"),
             source_file=source_file,
-            abstract=metadata.get("abstract", ""),
-            keywords=metadata.get("keywords", []),
-            research_type=ResearchType(metadata.get("research_type", "other")),
-            main_framework=metadata.get("main_framework", ""),
+            abstract=metadata.get("abstract") or "",
+            keywords=metadata.get("keywords") or [],
+            research_type=ResearchType(metadata.get("research_type") or "other"),
+            main_framework=metadata.get("main_framework") or "",
         )
 
     def _parse_response(self, raw: str) -> dict:

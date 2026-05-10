@@ -20,6 +20,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -73,7 +74,29 @@ class LitMeshDB:
             raise RuntimeError("Not connected. Use db.connect() or context manager.")
         schema = SCHEMA_PATH.read_text(encoding="utf-8")
         self.conn.executescript(schema)
+        self._ensure_compat_columns()
         self.conn.commit()
+
+    def _ensure_compat_columns(self):
+        """Add columns needed by newer schemas when opening an existing DB."""
+        section_cols = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(section_blocks)").fetchall()
+        }
+        additions = {
+            "heading_confidence": "REAL NOT NULL DEFAULT 1.0",
+            "display_title": "TEXT NOT NULL DEFAULT ''",
+            "structure_status": "TEXT NOT NULL DEFAULT 'clean'",
+            "chapter_index": "INTEGER NOT NULL DEFAULT 0",
+            "section_index": "INTEGER NOT NULL DEFAULT 0",
+            "block_index": "INTEGER NOT NULL DEFAULT 0",
+            "global_order_index": "INTEGER NOT NULL DEFAULT 0",
+            "parser_name": "TEXT NOT NULL DEFAULT ''",
+            "parser_element_id": "TEXT NOT NULL DEFAULT ''",
+            "parser_confidence": "REAL NOT NULL DEFAULT 1.0",
+        }
+        for col, ddl in additions.items():
+            if col not in section_cols:
+                self.conn.execute(f"ALTER TABLE section_blocks ADD COLUMN {col} {ddl}")
 
     # ---- v0.1: Corpus ----
 
@@ -125,6 +148,19 @@ class LitMeshDB:
         self.conn.commit()
         return paper.paper_id
 
+    def update_paper(self, paper) -> None:
+        self.conn.execute(
+            """UPDATE paper_cards SET title=?, authors=?, year=?, abstract=?,
+               abstract_summary=?, keywords=?, research_type=?, main_framework=?,
+               raw_text_hash=?, page_count=?, graph_id=?
+               WHERE paper_id=?""",
+            (paper.title, _json_list(paper.authors), paper.year, paper.abstract,
+             paper.abstract_summary, _json_list(paper.keywords), paper.research_type.value,
+             paper.main_framework, paper.raw_text_hash, paper.page_count,
+             paper.graph_id, paper.paper_id)
+        )
+        self.conn.commit()
+
     def get_paper(self, paper_id: str) -> Optional[dict]:
         row = self.conn.execute("SELECT * FROM paper_cards WHERE paper_id = ?", (paper_id,)).fetchone()
         return dict(row) if row else None
@@ -138,29 +174,122 @@ class LitMeshDB:
             rows = self.conn.execute("SELECT * FROM paper_cards ORDER BY year DESC").fetchall()
         return [dict(r) for r in rows]
 
+    def delete_paper(self, paper_id: str) -> int:
+        """Delete a paper and all related data. Returns count of deleted rows."""
+        # Get graph_id for cleanup
+        paper = self.get_paper(paper_id)
+        graph_id = paper.get("graph_id", "") if paper else ""
+
+        tables = [
+            ("claim_blocks", "paper_id"),
+            ("evidence_blocks", "paper_id"),
+            ("limitation_blocks", "paper_id"),
+            ("section_blocks", "paper_id"),
+            ("source_spans", "paper_id"),
+            ("extraction_runs", "paper_id"),
+            ("extraction_run_items", "run_id IN (SELECT run_id FROM extraction_runs WHERE paper_id = ?)"),
+            ("parse_quality_reports", "paper_id"),
+            ("review_inbox", "paper_id"),
+        ]
+        total = 0
+        for tbl, where_clause in tables:
+            if "?" in where_clause:
+                cur = self.conn.execute(f"DELETE FROM {tbl} WHERE {where_clause}", (paper_id,))
+            else:
+                cur = self.conn.execute(f"DELETE FROM {tbl} WHERE {where_clause} = ?", (paper_id,))
+            total += cur.rowcount
+
+        # Delete paper itself
+        self.conn.execute("DELETE FROM paper_cards WHERE paper_id = ?", (paper_id,))
+
+        # Clean up orphaned graph if no papers remain
+        if graph_id:
+            remaining = self.conn.execute(
+                "SELECT COUNT(*) FROM paper_cards WHERE graph_id = ?", (graph_id,)
+            ).fetchone()[0]
+            if remaining == 0:
+                self.conn.execute("PRAGMA foreign_keys = OFF")
+                self.conn.execute("DELETE FROM concept_keys WHERE graph_id = ?", (graph_id,))
+                self.conn.execute("DELETE FROM graph_relations WHERE graph_id = ?", (graph_id,))
+                self.conn.execute("DELETE FROM node_index WHERE graph_id = ?", (graph_id,))
+                self.conn.execute("DELETE FROM series_graphs WHERE graph_id = ?", (graph_id,))
+                self.conn.execute("PRAGMA foreign_keys = ON")
+
+        self.conn.commit()
+        return total
+
     # ---- SectionBlock ----
 
     def insert_section(self, section) -> str:
         self.conn.execute(
             """INSERT INTO section_blocks (section_id, graph_id, paper_id, heading,
-               heading_path, heading_level, raw_text, summary, page_start, page_end,
+               heading_path, heading_level, heading_confidence, display_title, structure_status,
+               chapter_index, section_index, block_index, global_order_index,
+               raw_text, summary, page_start, page_end,
+               parser_name, parser_element_id, parser_confidence,
                concept_keys, parent_section_id, prev_section_id, next_section_id, content_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (section.section_id, section.graph_id, section.paper_id, section.heading,
              _json_list(section.heading_path), section.heading_level.value,
+             section.heading_confidence, section.display_title or "",
+             section.structure_status.value if hasattr(section, 'structure_status') else "clean",
+             section.chapter_index, section.section_index, section.block_index,
+             section.global_order_index,
              section.raw_text, section.summary, section.page_start, section.page_end,
+             getattr(section, "parser_name", ""), getattr(section, "parser_element_id", ""),
+             getattr(section, "parser_confidence", 1.0),
              _json_list(section.concept_keys), section.parent_section_id,
              section.prev_section_id, section.next_section_id, section.content_hash)
         )
         self.conn.commit()
+        self.upsert_node_index(section.section_id, "section", section.graph_id,
+                               section.paper_id, section.section_id)
         return section.section_id
 
     def get_sections_by_paper(self, paper_id: str) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT * FROM section_blocks WHERE paper_id = ? ORDER BY page_start, section_id",
+            "SELECT * FROM section_blocks WHERE paper_id = ? ORDER BY global_order_index, page_start, section_id",
             (paper_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def insert_parse_quality_report(self, paper_id: str, graph_id: str, report) -> str:
+        """Persist parser quality diagnostics for audit and extraction gating."""
+        from dataclasses import asdict, is_dataclass
+
+        payload = asdict(report) if is_dataclass(report) else dict(report or {})
+        report_id = f"parse_{uuid4().hex[:12]}"
+        self.conn.execute(
+            """INSERT INTO parse_quality_reports
+               (report_id, paper_id, graph_id, parser_name, parser_version, quality_json, needs_structure_review)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                report_id,
+                paper_id,
+                graph_id,
+                payload.get("parser_name", ""),
+                payload.get("parser_version", ""),
+                json.dumps(payload, ensure_ascii=False),
+                int(bool(payload.get("needs_structure_review", False))),
+            ),
+        )
+        self.conn.commit()
+        return report_id
+
+    def get_parse_quality_report(self, paper_id: str) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT * FROM parse_quality_reports WHERE paper_id = ? ORDER BY created_at DESC LIMIT 1",
+            (paper_id,),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["quality"] = json.loads(data.get("quality_json") or "{}")
+        except json.JSONDecodeError:
+            data["quality"] = {}
+        data["segmenter_name"] = data["quality"].get("segmenter_name", "")
+        return data
 
     def update_section_summary(self, section_id: str, summary: str):
         self.conn.execute(
@@ -212,6 +341,8 @@ class LitMeshDB:
              claim.status.value, claim.source_span_id, claim.extraction_run_id)
         )
         self.conn.commit()
+        self.upsert_node_index(claim.claim_id, "claim", claim.graph_id,
+                               claim.paper_id, claim.section_id or "")
         return claim.claim_id
 
     def get_claims_by_paper(self, paper_id: str, status: Optional[str] = None) -> list[dict]:
@@ -248,6 +379,8 @@ class LitMeshDB:
              evidence.source_span_id, evidence.extraction_run_id, evidence.status.value)
         )
         self.conn.commit()
+        self.upsert_node_index(evidence.evidence_id, "evidence", evidence.graph_id,
+                               evidence.paper_id, evidence.section_id or "")
         return evidence.evidence_id
 
     # ---- LimitationBlock ----
@@ -266,6 +399,8 @@ class LitMeshDB:
              limitation.status.value)
         )
         self.conn.commit()
+        self.upsert_node_index(limitation.limitation_id, "limitation", limitation.graph_id,
+                               limitation.paper_id, limitation.section_id or "")
         return limitation.limitation_id
 
     # ---- ConceptKey ----
@@ -285,6 +420,7 @@ class LitMeshDB:
              concept.extraction_run_id)
         )
         self.conn.commit()
+        self.upsert_node_index(concept.concept_key, "concept", concept.graph_id)
         return concept.concept_key
 
     def find_concept_by_alias(self, alias: str, graph_id: Optional[str] = None) -> list[dict]:
@@ -316,6 +452,115 @@ class LitMeshDB:
         )
         self.conn.commit()
         return relation.relation_id
+
+    # ---- v0.9: Node index (unified node type lookup) ----
+
+    def upsert_node_index(self, node_id: str, node_type: str, graph_id: str,
+                          paper_id: str = "", section_id: str = ""):
+        """Insert or update a node in the unified index."""
+        self.conn.execute(
+            """INSERT INTO node_index (node_id, node_type, graph_id, paper_id, section_id)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(node_id) DO UPDATE SET
+               node_type=excluded.node_type, graph_id=excluded.graph_id,
+               paper_id=excluded.paper_id, section_id=excluded.section_id""",
+            (node_id, node_type, graph_id, paper_id, section_id)
+        )
+        self.conn.commit()
+
+    def get_node_type(self, node_id: str) -> Optional[str]:
+        """Fast node type lookup. Returns None if node not indexed."""
+        row = self.conn.execute(
+            "SELECT node_type FROM node_index WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        return row["node_type"] if row else None
+
+    def get_nodes_by_graph(self, graph_id: str, node_type: Optional[str] = None) -> list[dict]:
+        """Get all indexed nodes for a graph, optionally filtered by type."""
+        if node_type:
+            rows = self.conn.execute(
+                "SELECT * FROM node_index WHERE graph_id = ? AND node_type = ?",
+                (graph_id, node_type)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM node_index WHERE graph_id = ?", (graph_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- Block-concept links ----
+
+    def link_block_concept(self, concept_key: str, block_id: str, block_type: str, graph_id: str):
+        """Record a concept-block association."""
+        self.conn.execute(
+            """INSERT OR IGNORE INTO block_concepts (concept_key, block_id, block_type, graph_id)
+               VALUES (?, ?, ?, ?)""",
+            (concept_key, block_id, block_type, graph_id)
+        )
+        self.conn.commit()
+
+    def get_concepts_for_block(self, block_id: str) -> list[str]:
+        """Get concept keys associated with a block."""
+        rows = self.conn.execute(
+            "SELECT concept_key FROM block_concepts WHERE block_id = ?", (block_id,)
+        ).fetchall()
+        return [r["concept_key"] for r in rows]
+
+    def get_blocks_for_concept(self, concept_key: str) -> list[dict]:
+        """Get blocks associated with a concept."""
+        rows = self.conn.execute(
+            "SELECT * FROM block_concepts WHERE concept_key = ?", (concept_key,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- Claim-evidence links ----
+
+    def link_claim_evidence(self, claim_id: str, evidence_id: str, graph_id: str):
+        """Record a claim-evidence link (flattened from JSON refs)."""
+        self.conn.execute(
+            """INSERT OR IGNORE INTO claim_evidence_links (claim_id, evidence_id, graph_id)
+               VALUES (?, ?, ?)""",
+            (claim_id, evidence_id, graph_id)
+        )
+        self.conn.commit()
+
+    def get_evidence_for_claim(self, claim_id: str) -> list[str]:
+        """Get evidence IDs linked to a claim."""
+        rows = self.conn.execute(
+            "SELECT evidence_id FROM claim_evidence_links WHERE claim_id = ?", (claim_id,)
+        ).fetchall()
+        return [r["evidence_id"] for r in rows]
+
+    # ---- Claim-limitation links ----
+
+    def link_claim_limitation(self, claim_id: str, limitation_id: str, graph_id: str):
+        """Record a claim-limitation link (flattened from JSON refs)."""
+        self.conn.execute(
+            """INSERT OR IGNORE INTO claim_limitation_links (claim_id, limitation_id, graph_id)
+               VALUES (?, ?, ?)""",
+            (claim_id, limitation_id, graph_id)
+        )
+        self.conn.commit()
+
+    def get_limitations_for_claim(self, claim_id: str) -> list[str]:
+        """Get limitation IDs linked to a claim."""
+        rows = self.conn.execute(
+            "SELECT limitation_id FROM claim_limitation_links WHERE claim_id = ?", (claim_id,)
+        ).fetchall()
+        return [r["limitation_id"] for r in rows]
+
+    # ---- Batch node resolve for traversal ----
+
+    def batch_resolve_nodes(self, node_ids: list[str]) -> dict[str, str]:
+        """Batch resolve node types. Returns {node_id: node_type}."""
+        if not node_ids:
+            return {}
+        placeholders = ",".join("?" * len(node_ids))
+        rows = self.conn.execute(
+            f"SELECT node_id, node_type FROM node_index WHERE node_id IN ({placeholders})",
+            node_ids
+        ).fetchall()
+        return {r["node_id"]: r["node_type"] for r in rows}
 
     def get_relations_from(self, source_id: str, relation_type: Optional[str] = None) -> list[dict]:
         if relation_type:

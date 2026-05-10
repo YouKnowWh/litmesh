@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# pdfplumber needs libglib2.0 for PDF rendering
+# System deps: libglib for pdfplumber, tesseract for OCR fallback
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
+    tesseract-ocr \
+    tesseract-ocr-chi-sim \
+    tesseract-ocr-chi-tra \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

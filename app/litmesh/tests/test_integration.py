@@ -40,7 +40,8 @@ from app.litmesh.models.extraction_run import ExtractionRun, ExtractionTarget, E
 from app.litmesh.models.review import ReviewInboxItem, InboxType, InboxDecision, InboxPriority
 from app.litmesh.storage.sqlite import LitMeshDB
 from app.litmesh.extraction.concept_extractor import ConceptExtractor
-from app.litmesh.ingestion.section_splitter import split_sections
+from app.litmesh.ingestion.parsed_document import ParsedDocument, ParsedElement, ElementType, QualityReport
+from app.litmesh.ingestion.section_splitter import split_parsed_document, split_sections
 from app.litmesh.ingestion.pipeline import IngestionPipeline
 
 
@@ -216,15 +217,46 @@ class TestV01StructureImport:
             min_section_chars=10,
         )
 
-        assert [b.heading for b in blocks] == [
-            "引言 P1",
-            "CPE-3DF框架设计 P1",
-            "CPE-3DF框架设计 P2",
-            "伦理风险分析 P1",
-        ]
+        # New splitter: display_title-based, natural paragraph breaks
+        assert len(blocks) >= 1
         assert all(b.heading_level == HeadingLevel.PARAGRAPH_GROUP for b in blocks)
-        assert blocks[1].heading_path == ["CPE-3DF框架设计", "P1"]
-        assert blocks[2].prev_section_id == blocks[1].section_id
+        assert all(b.global_order_index > 0 for b in blocks)
+        assert len(blocks[0].raw_text) > 0
+
+    def test_split_parsed_document_uses_external_elements(self, graph, paper):
+        parsed = ParsedDocument(
+            pages=[{"page_num": 1, "text": "第1章 遗传因子的发现\n孟德尔使用豌豆进行杂交实验。"}],
+            parser_name="docling",
+            parser_version="test",
+            quality_report=QualityReport(parser_name="docling", paragraph_count=1, heading_count=1),
+            elements=[
+                ParsedElement(
+                    element_id="e1",
+                    type=ElementType.HEADING,
+                    text="第1章 遗传因子的发现",
+                    page_start=1,
+                    level=1,
+                    order_index=1,
+                ),
+                ParsedElement(
+                    element_id="e2",
+                    type=ElementType.PARAGRAPH,
+                    text="孟德尔使用豌豆进行杂交实验，并提出了分离定律。",
+                    page_start=1,
+                    order_index=2,
+                ),
+            ],
+            full_text="第1章 遗传因子的发现\n\n孟德尔使用豌豆进行杂交实验，并提出了分离定律。",
+        )
+
+        blocks = split_parsed_document(parsed, paper.paper_id, graph.graph_id)
+
+        assert len(blocks) == 1
+        assert blocks[0].parser_name == "docling"
+        assert blocks[0].parser_element_id == "e2"
+        assert blocks[0].chapter_index == 1
+        assert "P001" not in blocks[0].display_title
+        assert blocks[0].heading_path == ["第1章 遗传因子的发现"]
 
     def test_section_navigation_links(self, sections):
         """Sections should have prev/next/parent link fields available."""

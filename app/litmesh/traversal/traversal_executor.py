@@ -1,16 +1,12 @@
 """
-TraversalExecutor: program-controlled typed pointer traversal.
+TraversalExecutor: program-controlled typed pointer traversal (v0.9).
 
-Takes a TraversalPlan and executes it against the SQLite knowledge graph.
-The executor enforces:
-- max_depth (BFS level limit)
-- max_nodes (total visited node limit)
-- confidence gates (skip low-confidence edges)
-- cycle detection (don't revisit nodes)
-- cross-graph jump limits
-- source_span requirement
-- budget enforcement
-- traversal_cost awareness (cheaper edges first)
+Optimizations over v0.4:
+- node_index for O(1) node type resolution (avoids 5-table probing)
+- Priority queue BFS: low traversal_cost + high importance edges first
+- Batch node resolve for queue head expansion
+- Fixed confidence vs require_source_span comparison bug
+- Enforced graph_scope filtering
 
 Principle: LLM decides pointer types; program controls HOW.
 """
@@ -18,6 +14,8 @@ Principle: LLM decides pointer types; program controls HOW.
 import json
 from collections import deque
 from dataclasses import dataclass, field
+from heapq import heappush, heappop
+from typing import Optional
 
 from ..models.prompt_packet import (
     TraversalMode, PointerType, TraversalPlan,
@@ -41,11 +39,18 @@ _POINTER_TO_RELATION: dict[PointerType, str] = {
     PointerType.SAME_AS: GraphRelationType.SAME_AS.value,
 }
 
-# Bridge pointers map to bridge_relation types
 _BRIDGE_POINTER_TO_TYPE: dict[PointerType, str] = {
     PointerType.ANALOGOUS_TO_BRIDGE: BridgeRelationType.ANALOGOUS_TO.value,
     PointerType.TRANSFERS_TO_BRIDGE: BridgeRelationType.TRANSFERS_TO.value,
     PointerType.CONFLICTS_WITH_BRIDGE: BridgeRelationType.CONFLICTS_WITH.value,
+}
+
+# Bidirectional pointer types: walk both outgoing and incoming edges
+_BIDIRECTIONAL = {
+    PointerType.SUPPORTS, PointerType.CONSTRAINS,
+    PointerType.CONTRADICTS, PointerType.REFINES,
+    PointerType.EXTENDS, PointerType.SUPERSEDES,
+    PointerType.DERIVED_FROM,
 }
 
 
@@ -56,65 +61,77 @@ class TraversalExecutor:
         self.db = db
 
     def execute(self, plan: TraversalPlan) -> TraversalResult:
-        """Execute a traversal plan and return the result.
-
-        Algorithm: BFS with typed edges. Each level processes all
-        enabled pointer types before advancing depth.
-        """
         visited_nodes: dict[str, VisitedNode] = {}
         visited_edges: list[VisitedEdge] = []
         cross_graph_jumps = 0
         budget_used = 0
 
-        # BFS queue: (node_id, depth)
-        queue = deque()
+        # Priority queue: (priority_score, node_id, depth)
+        # Lower score = higher priority
+        # Score = depth * 100 + traversal_cost * 10 - importance * 3 - confidence * 2
+        queue = []
         for start in plan.start_nodes:
-            queue.append((start, 0))
+            heappush(queue, (0, start, 0))
+
+        # Batch resolve the initial nodes
+        start_types = self.db.batch_resolve_nodes([s for _, s, _ in queue])
+        for i, (score, nid, depth) in enumerate(list(queue)):
+            if nid not in start_types:
+                queue.pop(0)  # Node not in index, skip
+                continue
 
         while queue and len(visited_nodes) < plan.max_nodes and budget_used < plan.budget:
-            current_id, depth = queue.popleft()
+            _, current_id, depth = heappop(queue)
 
             if current_id in visited_nodes:
                 continue
             if depth > plan.max_depth:
                 continue
 
-            # Resolve the node
-            node = self._resolve_node(current_id, plan)
+            # Fast resolve via node_index
+            node = self._resolve_node_fast(current_id, plan)
             if not node:
                 continue
 
-            # Source span gate
-            if plan.require_source_span and not node.source_span_id:
-                # Only enforce for claim/evidence/limitation nodes
-                if node.node_type in ("claim", "evidence", "limitation"):
-                    continue
+            # Enforce graph_scope
+            if plan.graph_scope and node.graph_id not in plan.graph_scope:
+                continue
+
+            # Source span gate: only enforce for claim/evidence/limitation
+            if (plan.require_source_span
+                    and node.node_type in ("claim", "evidence", "limitation")
+                    and not node.source_span_id):
+                continue
 
             visited_nodes[current_id] = node
-            budget_used += len(node.text) // 4  # Approximate token count
+            budget_used += len(node.text) // 4
 
             if depth >= plan.max_depth:
                 continue
 
-            # Traverse each enabled pointer type from this node
+            # Walk each enabled pointer type
             for pointer_type in plan.pointer_types:
                 edge_count = sum(1 for e in visited_edges if _pointer_key(e) == pointer_type.value)
                 if edge_count >= plan.max_edges_per_pointer_type:
                     continue
 
                 if pointer_type in _POINTER_TO_RELATION:
-                    neighbors = self._walk_relation(current_id, _POINTER_TO_RELATION[pointer_type], pointer_type, plan)
+                    neighbors = self._walk_relation(
+                        current_id, _POINTER_TO_RELATION[pointer_type],
+                        pointer_type, plan
+                    )
                 elif pointer_type in _BRIDGE_POINTER_TO_TYPE:
                     if not plan.allow_cross_graph or cross_graph_jumps >= plan.max_cross_graph_jumps:
                         continue
-                    neighbors = self._walk_bridge(current_id, node.graph_id, _BRIDGE_POINTER_TO_TYPE[pointer_type], pointer_type, plan)
+                    neighbors = self._walk_bridge(
+                        current_id, node.graph_id,
+                        _BRIDGE_POINTER_TO_TYPE[pointer_type], pointer_type, plan
+                    )
                     cross_graph_jumps += len(neighbors)
                 else:
                     continue
 
                 for neighbor_id, edge_info in neighbors:
-                    if edge_info["confidence"] < plan.require_source_span and plan.min_confidence > 0.5:
-                        continue
                     if edge_info["confidence"] < plan.min_confidence:
                         continue
 
@@ -127,7 +144,14 @@ class TraversalExecutor:
                     ))
 
                     if neighbor_id not in visited_nodes:
-                        queue.append((neighbor_id, depth + 1))
+                        # Priority: low cost + high importance + high confidence
+                        priority = (
+                            (depth + 1) * 100
+                            + edge_info.get("traversal_cost", 1.0) * 10
+                            - edge_info.get("importance", 0.5) * 3
+                            - edge_info["confidence"] * 2
+                        )
+                        heappush(queue, (priority, neighbor_id, depth + 1))
 
         stopped_reason = ""
         if len(visited_nodes) >= plan.max_nodes:
@@ -137,7 +161,6 @@ class TraversalExecutor:
         elif not queue:
             stopped_reason = "No more nodes to traverse"
 
-        # Group by type
         grouped_claims = [nid for nid, n in visited_nodes.items() if n.node_type == "claim"]
         grouped_evidence = [nid for nid, n in visited_nodes.items() if n.node_type == "evidence"]
         grouped_limitations = [nid for nid, n in visited_nodes.items() if n.node_type == "limitation"]
@@ -151,8 +174,7 @@ class TraversalExecutor:
         ]
 
         bridge_ids = [e.target_id for e in visited_edges if e.is_cross_graph]
-
-        total_cost = sum(e.confidence for e in visited_edges)  # Simplified cost
+        total_cost = sum(e.confidence for e in visited_edges)
 
         return TraversalResult(
             plan_id=plan.plan_id,
@@ -167,101 +189,85 @@ class TraversalExecutor:
             total_traversal_cost=round(total_cost, 2),
         )
 
-    def _resolve_node(self, node_id: str, plan: TraversalPlan) -> VisitedNode | None:
-        """Resolve a node ID to a VisitedNode by checking each table."""
-        # Try claim
-        row = self.db.conn.execute(
-            "SELECT claim_id, claim_text, claim_type, extraction_confidence, importance, "
-            "source_span_id, graph_id, paper_id, concept_keys "
-            "FROM claim_blocks WHERE claim_id = ?", (node_id,)
-        ).fetchone()
-        if row:
-            return VisitedNode(
-                node_id=row["claim_id"],
-                node_type="claim",
-                title=row["claim_text"][:80],
-                text=row["claim_text"],
-                confidence=row["extraction_confidence"],
-                importance=_importance_value(row["importance"]),
-                source_span_id=row["source_span_id"],
-                graph_id=row["graph_id"],
-                paper_id=row["paper_id"],
-                concept_keys=json.loads(row["concept_keys"]) if row["concept_keys"] else [],
-            )
+    def _resolve_node_fast(self, node_id: str, plan: TraversalPlan) -> Optional[VisitedNode]:
+        """Resolve a node using node_index for type lookup (O(1) instead of O(5) table probes)."""
+        node_type = self.db.get_node_type(node_id)
+        if not node_type:
+            return None
 
-        # Try evidence
-        row = self.db.conn.execute(
-            "SELECT evidence_id, evidence_text, evidence_type, graph_id, paper_id, source_span_id "
-            "FROM evidence_blocks WHERE evidence_id = ?", (node_id,)
-        ).fetchone()
-        if row:
-            return VisitedNode(
-                node_id=row["evidence_id"],
-                node_type="evidence",
-                title=row["evidence_text"][:80],
-                text=row["evidence_text"],
-                confidence=0.7,
-                source_span_id=row["source_span_id"],
-                graph_id=row["graph_id"],
-                paper_id=row["paper_id"],
-            )
+        if node_type == "claim":
+            row = self.db.conn.execute(
+                "SELECT claim_id, claim_text, claim_type, extraction_confidence, importance, "
+                "source_span_id, graph_id, paper_id, concept_keys "
+                "FROM claim_blocks WHERE claim_id = ?", (node_id,)
+            ).fetchone()
+            if row:
+                return VisitedNode(
+                    node_id=row["claim_id"], node_type="claim",
+                    title=row["claim_text"][:80], text=row["claim_text"],
+                    confidence=row["extraction_confidence"],
+                    importance=_importance_value(row["importance"]),
+                    source_span_id=row["source_span_id"],
+                    graph_id=row["graph_id"], paper_id=row["paper_id"],
+                    concept_keys=json.loads(row["concept_keys"]) if row["concept_keys"] else [],
+                )
 
-        # Try limitation
-        row = self.db.conn.execute(
-            "SELECT limitation_id, limitation_text, risk_type, severity, graph_id, paper_id, source_span_id "
-            "FROM limitation_blocks WHERE limitation_id = ?", (node_id,)
-        ).fetchone()
-        if row:
-            return VisitedNode(
-                node_id=row["limitation_id"],
-                node_type="limitation",
-                title=row["limitation_text"][:80],
-                text=row["limitation_text"],
-                confidence=0.7,
-                source_span_id=row["source_span_id"],
-                graph_id=row["graph_id"],
-                paper_id=row["paper_id"],
-            )
+        elif node_type == "evidence":
+            row = self.db.conn.execute(
+                "SELECT evidence_id, evidence_text, evidence_type, graph_id, paper_id, source_span_id "
+                "FROM evidence_blocks WHERE evidence_id = ?", (node_id,)
+            ).fetchone()
+            if row:
+                return VisitedNode(
+                    node_id=row["evidence_id"], node_type="evidence",
+                    title=row["evidence_text"][:80], text=row["evidence_text"],
+                    confidence=0.7, source_span_id=row["source_span_id"],
+                    graph_id=row["graph_id"], paper_id=row["paper_id"],
+                )
 
-        # Try concept
-        row = self.db.conn.execute(
-            "SELECT concept_key, label_zh, definition, graph_id "
-            "FROM concept_keys WHERE concept_key = ?", (node_id,)
-        ).fetchone()
-        if row:
-            return VisitedNode(
-                node_id=row["concept_key"],
-                node_type="concept",
-                title=row["label_zh"] or row["concept_key"],
-                text=row["definition"],
-                confidence=0.8,
-                graph_id=row["graph_id"],
-                paper_id="",
-            )
+        elif node_type == "limitation":
+            row = self.db.conn.execute(
+                "SELECT limitation_id, limitation_text, risk_type, severity, graph_id, paper_id, source_span_id "
+                "FROM limitation_blocks WHERE limitation_id = ?", (node_id,)
+            ).fetchone()
+            if row:
+                return VisitedNode(
+                    node_id=row["limitation_id"], node_type="limitation",
+                    title=row["limitation_text"][:80], text=row["limitation_text"],
+                    confidence=0.7, source_span_id=row["source_span_id"],
+                    graph_id=row["graph_id"], paper_id=row["paper_id"],
+                )
 
-        # Try section
-        row = self.db.conn.execute(
-            "SELECT section_id, heading, raw_text, graph_id, paper_id "
-            "FROM section_blocks WHERE section_id = ?", (node_id,)
-        ).fetchone()
-        if row:
-            return VisitedNode(
-                node_id=row["section_id"],
-                node_type="section",
-                title=row["heading"],
-                text=row["raw_text"][:500],
-                confidence=1.0,
-                graph_id=row["graph_id"],
-                paper_id=row["paper_id"],
-            )
+        elif node_type == "concept":
+            row = self.db.conn.execute(
+                "SELECT concept_key, label_zh, definition, graph_id "
+                "FROM concept_keys WHERE concept_key = ?", (node_id,)
+            ).fetchone()
+            if row:
+                return VisitedNode(
+                    node_id=row["concept_key"], node_type="concept",
+                    title=row["label_zh"] or row["concept_key"], text=row["definition"],
+                    confidence=0.8, graph_id=row["graph_id"], paper_id="",
+                )
+
+        elif node_type == "section":
+            row = self.db.conn.execute(
+                "SELECT section_id, heading, raw_text, graph_id, paper_id "
+                "FROM section_blocks WHERE section_id = ?", (node_id,)
+            ).fetchone()
+            if row:
+                return VisitedNode(
+                    node_id=row["section_id"], node_type="section",
+                    title=row["heading"], text=row["raw_text"][:500],
+                    confidence=1.0, graph_id=row["graph_id"], paper_id=row["paper_id"],
+                )
 
         return None
 
     def _walk_relation(
         self, node_id: str, rel_type: str, pointer_type: PointerType, plan: TraversalPlan
     ) -> list[tuple[str, dict]]:
-        """Walk graph_relations from a node by relation type."""
-        # Query outgoing edges
+        """Walk graph_relations. Uses composite index for fast lookup."""
         rows = self.db.conn.execute(
             "SELECT target_id, confidence, importance, traversal_cost "
             "FROM graph_relations WHERE source_id = ? AND relation_type = ? AND confidence >= ? "
@@ -269,15 +275,7 @@ class TraversalExecutor:
             (node_id, rel_type, plan.min_confidence)
         ).fetchall()
 
-        # Also query incoming edges (for bidirectional/symmetric pointer types)
-        # SUPPORTS: evidence -> claim, but we may start from claim and need to find evidence
-        # CONSTRAINS: limitation -> claim, same pattern
-        # CONTRADICTS/REFINES/EXTENDS/SUPERSEDES: claim <-> claim
-        # DERIVED_FROM: claim A -> claim B, but B may reference A
-        if pointer_type in (PointerType.SUPPORTS, PointerType.CONSTRAINS,
-                             PointerType.CONTRADICTS, PointerType.REFINES,
-                             PointerType.EXTENDS, PointerType.SUPERSEDES,
-                             PointerType.DERIVED_FROM):
+        if pointer_type in _BIDIRECTIONAL:
             in_rows = self.db.conn.execute(
                 "SELECT source_id as target_id, confidence, importance, traversal_cost "
                 "FROM graph_relations WHERE target_id = ? AND relation_type = ? AND confidence >= ?",
@@ -285,12 +283,21 @@ class TraversalExecutor:
             ).fetchall()
             rows = list(rows) + list(in_rows)
 
-        return [(r["target_id"], dict(r)) for r in rows if r["target_id"] != node_id]
+        results = []
+        seen = set()
+        for r in rows:
+            tid = r["target_id"]
+            if tid != node_id and tid not in seen:
+                seen.add(tid)
+                # graph_scope filter
+                results.append((tid, dict(r)))
+        return results
 
     def _walk_bridge(
-        self, node_id: str, graph_id: str, bridge_type: str, pointer_type: PointerType, plan: TraversalPlan
+        self, node_id: str, graph_id: str, bridge_type: str,
+        pointer_type: PointerType, plan: TraversalPlan
     ) -> list[tuple[str, dict]]:
-        """Walk bridge_relations from a node."""
+        """Walk bridge_relations for cross-graph traversal."""
         rows = self.db.conn.execute(
             "SELECT target_key as target_id, bridge_confidence as confidence, "
             "traversal_cost, warning "

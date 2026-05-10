@@ -76,10 +76,20 @@ CREATE TABLE IF NOT EXISTS section_blocks (
     heading TEXT NOT NULL DEFAULT '',
     heading_path TEXT NOT NULL DEFAULT '[]',          -- JSON array
     heading_level TEXT NOT NULL DEFAULT 'section',
+    heading_confidence REAL NOT NULL DEFAULT 1.0,
+    display_title TEXT NOT NULL DEFAULT '',
+    structure_status TEXT NOT NULL DEFAULT 'clean',
+    chapter_index INTEGER NOT NULL DEFAULT 0,
+    section_index INTEGER NOT NULL DEFAULT 0,
+    block_index INTEGER NOT NULL DEFAULT 0,
+    global_order_index INTEGER NOT NULL DEFAULT 0,
     raw_text TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL DEFAULT '',
     page_start INTEGER,
     page_end INTEGER,
+    parser_name TEXT NOT NULL DEFAULT '',
+    parser_element_id TEXT NOT NULL DEFAULT '',
+    parser_confidence REAL NOT NULL DEFAULT 1.0,
     concept_keys TEXT NOT NULL DEFAULT '[]',          -- JSON array
     parent_section_id TEXT,
     prev_section_id TEXT,
@@ -298,6 +308,19 @@ CREATE TABLE IF NOT EXISTS extraction_run_items (
     FOREIGN KEY (run_id) REFERENCES extraction_runs(run_id)
 );
 
+CREATE TABLE IF NOT EXISTS parse_quality_reports (
+    report_id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    parser_name TEXT NOT NULL DEFAULT '',
+    parser_version TEXT NOT NULL DEFAULT '',
+    quality_json TEXT NOT NULL DEFAULT '{}',
+    needs_structure_review INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (paper_id) REFERENCES paper_cards(paper_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
 CREATE TABLE IF NOT EXISTS review_inbox (
     inbox_id TEXT PRIMARY KEY,
     inbox_type TEXT NOT NULL,                          -- extraction, concept, bridge, conflict
@@ -402,11 +425,72 @@ CREATE INDEX IF NOT EXISTS idx_bridge_type ON bridge_relations(bridge_type);
 
 -- Extraction runs by paper
 CREATE INDEX IF NOT EXISTS idx_extraction_runs_paper ON extraction_runs(paper_id);
+CREATE INDEX IF NOT EXISTS idx_parse_quality_paper ON parse_quality_reports(paper_id);
 
 -- Review inbox
 CREATE INDEX IF NOT EXISTS idx_inbox_type ON review_inbox(inbox_type);
 CREATE INDEX IF NOT EXISTS idx_inbox_decision ON review_inbox(decision);
 CREATE INDEX IF NOT EXISTS idx_inbox_paper ON review_inbox(paper_id);
+
+-- ============================================================
+-- v0.9: Traversal index layer
+-- Avoid repeated JSON parsing and multi-table probing during traversal.
+-- ============================================================
+
+-- Unified node lookup: node_id -> type, graph_id, paper_id, section_id
+CREATE TABLE IF NOT EXISTS node_index (
+    node_id TEXT PRIMARY KEY,
+    node_type TEXT NOT NULL,       -- claim / evidence / limitation / concept / section
+    graph_id TEXT NOT NULL,
+    paper_id TEXT NOT NULL DEFAULT '',
+    section_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_index_graph ON node_index(graph_id);
+CREATE INDEX IF NOT EXISTS idx_node_index_type ON node_index(node_type);
+
+-- Flattened concept-block associations (avoids JSON scan on concept_keys)
+CREATE TABLE IF NOT EXISTS block_concepts (
+    concept_key TEXT NOT NULL,
+    block_id TEXT NOT NULL,
+    block_type TEXT NOT NULL,      -- claim / evidence / limitation
+    graph_id TEXT NOT NULL,
+    PRIMARY KEY (concept_key, block_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_block_concepts_block ON block_concepts(block_id);
+CREATE INDEX IF NOT EXISTS idx_block_concepts_graph ON block_concepts(graph_id);
+
+-- Flattened claim -> evidence links (avoids JSON scan on evidence_refs)
+CREATE TABLE IF NOT EXISTS claim_evidence_links (
+    claim_id TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    PRIMARY KEY (claim_id, evidence_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cel_claim ON claim_evidence_links(claim_id);
+CREATE INDEX IF NOT EXISTS idx_cel_evidence ON claim_evidence_links(evidence_id);
+
+-- Flattened claim -> limitation links (avoids JSON scan on limitation_refs)
+CREATE TABLE IF NOT EXISTS claim_limitation_links (
+    claim_id TEXT NOT NULL,
+    limitation_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    PRIMARY KEY (claim_id, limitation_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cll_claim ON claim_limitation_links(claim_id);
+CREATE INDEX IF NOT EXISTS idx_cll_limitation ON claim_limitation_links(limitation_id);
+
+-- Composite traversal indexes: avoid probing all relation types when walking
+CREATE INDEX IF NOT EXISTS idx_relations_graph_source_type ON graph_relations(graph_id, source_id, relation_type);
+CREATE INDEX IF NOT EXISTS idx_relations_graph_target_type ON graph_relations(graph_id, target_id, relation_type);
 
 -- ============================================================
 -- Triggers for auto-updating updated_at

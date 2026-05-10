@@ -8,3 +8,6 @@ datasketch>=1.6.0
 httpx>=0.28.0
 lancedb>=0.17.0
 python-multipart>=0.0.9
+PyMuPDF>=1.24.0
+pytesseract>=0.3.10
+Pillow>=10.0.0

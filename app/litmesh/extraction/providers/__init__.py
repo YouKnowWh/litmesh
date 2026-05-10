@@ -9,17 +9,22 @@ Internally they convert to the native API format.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import uuid
 from abc import ABC, abstractmethod
 from typing import Iterator
+
+logger = logging.getLogger("litmesh.llm")
 
 
 class BaseProvider(ABC):
     """Minimal interface: text in, text out."""
 
     @abstractmethod
-    def complete(self, prompt: str, system: str = "", temperature: float = 0.1) -> str:
+    def complete(self, prompt: str, system: str = "", temperature: float = 0.1,
+                 max_tokens: int = 4096) -> str:
         ...
 
     def complete_json(self, prompt: str, system: str = "",
@@ -39,7 +44,8 @@ class OpenAICompatibleProvider(BaseProvider):
         self.api_key = api_key
         self.model = model
 
-    def complete(self, prompt: str, system: str = "", temperature: float = 0.1) -> str:
+    def complete(self, prompt: str, system: str = "", temperature: float = 0.1,
+                 max_tokens: int = 4096) -> str:
         import httpx
 
         messages = []
@@ -50,16 +56,26 @@ class OpenAICompatibleProvider(BaseProvider):
         body = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens,
             "temperature": temperature,
         }
 
         url = f"{self.base_url}/chat/completions"
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
+
+        t0 = time.monotonic()
         resp = httpx.post(url, json=body, headers=headers, timeout=180)
+        dt = time.monotonic() - t0
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage", {})
+
+        logger.info("model=%s prompt_len=%d resp_len=%d time=%.1fs tokens_in=%s tokens_out=%s",
+                    self.model, len(prompt), len(content), dt,
+                    usage.get("prompt_tokens", "?"),
+                    usage.get("completion_tokens", "?"))
+        return content
 
 
 # ---- Anthropic Messages API ----
@@ -72,7 +88,8 @@ class AnthropicProvider(BaseProvider):
         self.api_key = api_key
         self.model = model
 
-    def complete(self, prompt: str, system: str = "", temperature: float = 0.1) -> str:
+    def complete(self, prompt: str, system: str = "", temperature: float = 0.1,
+                 max_tokens: int = 4096) -> str:
         import anthropic as anthropic_sdk
 
         client = anthropic_sdk.Anthropic(
@@ -82,7 +99,7 @@ class AnthropicProvider(BaseProvider):
 
         message = client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             temperature=temperature,
             system=system or "You are a precise academic text analyst.",
             messages=[{"role": "user", "content": prompt}],
@@ -107,7 +124,8 @@ class GeminiProvider(BaseProvider):
         self.api_key = api_key
         self.model = model
 
-    def complete(self, prompt: str, system: str = "", temperature: float = 0.1) -> str:
+    def complete(self, prompt: str, system: str = "", temperature: float = 0.1,
+                 max_tokens: int = 4096) -> str:
         import httpx
 
         contents = []
@@ -120,7 +138,7 @@ class GeminiProvider(BaseProvider):
             "contents": contents,
             "generationConfig": {
                 "temperature": temperature,
-                "maxOutputTokens": 4096,
+                "maxOutputTokens": max_tokens,
             },
         }
         if system:

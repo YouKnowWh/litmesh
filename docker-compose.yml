@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   litmesh:
     build: .
@@ -8,22 +6,40 @@ services:
       - "8001:8000"
     volumes:
       - ./data:/app/data
+      - ./logs:/app/logs
     environment:
       # ---- Global fallback ----
-      - LITMESH_LLM_PROVIDER=${LITMESH_LLM_PROVIDER:-anthropic}
-      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-deepseek-v4-pro[1m]}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.deepseek.com/anthropic}
+      - LITMESH_LLM_PROVIDER=${LITMESH_LLM_PROVIDER:-openai_compatible}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-deepseek-chat}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-3-5-sonnet-latest}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       # ---- Extraction role (claim/evidence/limitation/concept) ----
       # Uses global fallback by default. Override to use a cheaper model:
-      # LITMESH_EXTRACTION_MODEL=deepseek-v4-flash
-      # LITMESH_EXTRACTION_PROVIDER=anthropic
+      # LITMESH_EXTRACTION_MODEL=deepseek-chat
+      # LITMESH_EXTRACTION_PROVIDER=openai_compatible
       - LITMESH_EXTRACTION_MODEL=${LITMESH_EXTRACTION_MODEL:-}
       - LITMESH_EXTRACTION_PROVIDER=${LITMESH_EXTRACTION_PROVIDER:-}
       - LITMESH_EXTRACTION_BASE_URL=${LITMESH_EXTRACTION_BASE_URL:-}
       - LITMESH_EXTRACTION_API_KEY=${LITMESH_EXTRACTION_API_KEY:-}
+      # ---- Segment role (PDF page-window segmentation) ----
+      - LITMESH_SEGMENT_MODEL=${LITMESH_SEGMENT_MODEL:-deepseek-chat}
+      - LITMESH_SEGMENT_PROVIDER=${LITMESH_SEGMENT_PROVIDER:-openai_compatible}
+      - LITMESH_SEGMENT_BASE_URL=${LITMESH_SEGMENT_BASE_URL:-https://api.deepseek.com/v1}
+      - LITMESH_SEGMENT_API_KEY=${LITMESH_SEGMENT_API_KEY:-}
+      - LITMESH_SEGMENT_REVIEW_MODEL=${LITMESH_SEGMENT_REVIEW_MODEL:-deepseek-v4-pro[1m]}
+      # ---- Outsourced PDF structure parser ----
+      # Optional remote MinerU/Markdown API. When set, parser=auto tries this
+      # before local pdfplumber+LLM segmentation.
+      - LITMESH_MINERU_API_URL=${LITMESH_MINERU_API_URL:-}
+      - LITMESH_MINERU_API_TIMEOUT=${LITMESH_MINERU_API_TIMEOUT:-1800}
+      # Optional generic command template, e.g.
+      # "magic-pdf -p {pdf} -o {output} -m auto"
+      - LITMESH_MARKDOWN_COMMAND=${LITMESH_MARKDOWN_COMMAND:-}
       # ---- Review role (bridge/series/inbox) ----
       - LITMESH_REVIEW_MODEL=${LITMESH_REVIEW_MODEL:-}
       - LITMESH_REVIEW_PROVIDER=${LITMESH_REVIEW_PROVIDER:-}

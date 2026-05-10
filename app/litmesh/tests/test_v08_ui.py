@@ -21,6 +21,7 @@ from app.litmesh.models.review import ReviewInboxItem, InboxType
 from app.litmesh.models.source_span import SourceSpan, SpanPosition
 from app.litmesh.models.series_group import SeriesGroup
 from app.litmesh.api.routes import create_app
+from app.litmesh.api.routes import ImportRequest
 
 
 @pytest.fixture
@@ -50,6 +51,18 @@ def _seed_data(db):
     p = PaperCard(graph_id=g.graph_id, title="Test Paper", authors=["A"],
                   year=2024, source_file="test.pdf", main_framework="TestFW")
     db.insert_paper(p)
+    db.insert_parse_quality_report(
+        p.paper_id,
+        g.graph_id,
+        {
+            "parser_name": "docling",
+            "parser_version": "test",
+            "segmenter_name": "docling",
+            "paragraph_count": 1,
+            "heading_count": 1,
+            "needs_structure_review": False,
+        },
+    )
 
     span = SourceSpan(span_id="span_ui01", paper_id=p.paper_id,
                       span_type="paragraph", source_text="Test",
@@ -96,6 +109,17 @@ class TestUIEndpoints:
         r2 = client.get(f"/papers/{pid}")
         assert r2.status_code == 200
         assert "Test Paper" in r2.json()["title"]
+
+    def test_parse_quality_endpoint(self, client):
+        r = client.get("/papers")
+        pid = r.json()["papers"][0]["paper_id"]
+        r2 = client.get(f"/papers/{pid}/parse-quality")
+        assert r2.status_code == 200
+        assert r2.json()["report"]["parser_name"] == "docling"
+
+    def test_import_request_accepts_segmenter(self):
+        req = ImportRequest(pdf_path="book.pdf", parser="pdfplumber", segmenter="llm")
+        assert req.segmenter == "llm"
 
     def test_claims_list(self, client):
         r = client.get("/claims")

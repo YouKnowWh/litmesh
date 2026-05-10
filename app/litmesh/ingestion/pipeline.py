@@ -9,19 +9,23 @@ Orchestrates:
 Each PDF gets its own isolated SeriesGraph. SeriesDetector assigns to a SeriesGroup.
 """
 
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from ..models.graph import SeriesGraph, GraphType, CrossGraphPolicy
+
+logger = logging.getLogger("litmesh.pipeline")
 from ..models.corpus import CorpusCard, CorpusType, IntegrationPolicy
 from ..models.extraction_run import ExtractionRun, ExtractionTarget, ExtractionStatus
 from ..models.review import ReviewInboxItem, InboxType, InboxPriority, InboxDecision
 from ..models.relation import GraphRelation, GraphRelationType
 
-from .pdf_parser import PDFExtractor
 from .metadata_extractor import MetadataExtractor
-from .section_splitter import split_sections
+from .parsers import parse_document
+from .section_splitter import split_parsed_document, split_sections
 
-from ..extraction.claim_extractor import ClaimExtractor
-from ..extraction.evidence_extractor import EvidenceExtractor
-from ..extraction.limitation_extractor import LimitationExtractor
+from ..extraction.combined_extractor import CombinedExtractor
 from ..extraction.concept_extractor import ConceptExtractor
 from ..extraction.relation_linker import RelationLinker
 from ..registry.concept_registry import ConceptRegistry
@@ -38,11 +42,31 @@ class IngestionPipeline:
        then SeriesDetector decides series grouping.
     """
 
-    def __init__(self, db, llm_client, graph_id: str = "", corpus_id: str = ""):
+    def __init__(
+        self,
+        db,
+        llm_client,
+        graph_id: str = "",
+        corpus_id: str = "",
+        parser_name: str = "auto",
+        segmenter_name: str = "auto",
+        segment_llm_client=None,
+        progress_tracker=None,
+        task_id: str = "",
+    ):
         self.db = db
         self.llm = llm_client
         self.graph_id = graph_id
         self.corpus_id = corpus_id
+        self.parser_name = parser_name
+        self.segmenter_name = segmenter_name
+        self.segment_llm_client = segment_llm_client or llm_client
+        self._tracker = progress_tracker
+        self._task_id = task_id
+
+    def _emit(self, stage: str, message: str, percentage: float, **metadata):
+        if self._tracker and self._task_id:
+            self._tracker.emit(self._task_id, stage, message, percentage, **metadata)
 
     def _ensure_graph(self, paper_card) -> str:
         """Auto-create a SeriesGraph if none provided."""
@@ -76,35 +100,93 @@ class IngestionPipeline:
         return detector.detect(paper_card, self.graph_id,
                                 paper_card.main_framework or "general")
 
-    def run_v0_1(self, pdf_path: str) -> dict:
+    def run_v0_1(self, pdf_path: str, existing_paper_id: str = "") -> dict:
         """v0.1: PDF -> PaperCard -> SectionBlocks -> SourceSpans."""
-        # 1. Extract PDF text
-        extractor = PDFExtractor(pdf_path)
-        result = extractor.extract()
+        is_existing = bool(existing_paper_id)
+        t_start = time.monotonic()
+
+        # 1. Parse PDF into a unified document structure.
+        logger.info("v0.1 start: pdf=%s existing_paper=%s", pdf_path, is_existing)
+        self._emit("parsing", "Parsing PDF...", 5.0)
+        last_reported = [0]  # mutable closure for tracking last reported page
+        def _parse_progress(current, total):
+            pct = 5.0 + (current / max(total, 1)) * 10.0
+            # Only emit meaningful changes to avoid flooding
+            if current - last_reported[0] >= max(1, total // 20) or current == total:
+                self._emit("parsing", f"Parsing PDF: page {current}/{total}", pct,
+                           current=current, total=total)
+                last_reported[0] = current
+        parsed = parse_document(
+            pdf_path,
+            self.parser_name,
+            segmenter_name=self.segmenter_name,
+            segment_llm_client=self.segment_llm_client,
+            progress_callback=_parse_progress,
+            paper_id=existing_paper_id if is_existing else "",
+            audit_dir="logs/parse_audit",
+        )
+        t_parsed = time.monotonic()
+        logger.info("v0.1 parsing done: pages=%d parser=%s time=%.1fs",
+                    len(parsed.pages), parsed.parser_name, t_parsed - t_start)
+        self._emit("parsing", f"PDF parsed: {len(parsed.pages)} pages, using {parsed.parser_name}", 15.0,
+                   parser=parsed.parser_name, pages=len(parsed.pages))
 
         # 2. Extract metadata -> PaperCard
+        self._emit("metadata", "Extracting metadata via LLM...", 15.0)
         meta_extractor = MetadataExtractor(self.llm)
         paper_card = meta_extractor.extract(
-            full_text=result["full_text"],
+            full_text=parsed.full_text,
             source_file=pdf_path,
-            graph_id="",  # Will be set after graph creation
+            graph_id=self.graph_id if is_existing else "",
         )
+        t_meta = time.monotonic()
+        logger.info("v0.1 metadata done: title=%s time=%.1fs",
+                    paper_card.title[:60], t_meta - t_parsed)
+        self._emit("metadata", f"Metadata extracted: {paper_card.title[:60]}", 22.0,
+                   title=paper_card.title)
+
+        # Override paper_id with the pre-created one so it survives page refresh
+        if is_existing:
+            paper_card.paper_id = existing_paper_id
 
         # 3. Auto-create graph or use provided one
-        self._ensure_graph(paper_card)
+        if not self.graph_id:
+            self._emit("graph", "Creating graph...", 25.0)
+            self._ensure_graph(paper_card)
         paper_card.graph_id = self.graph_id
 
-        paper_card.raw_text_hash = result["raw_text_hash"]
-        paper_card.page_count = result["page_count"]
-        self.db.insert_paper(paper_card)
+        import hashlib
+
+        paper_card.raw_text_hash = hashlib.sha256(parsed.full_text.encode("utf-8")).hexdigest()
+        paper_card.page_count = len(parsed.pages)
+
+        if is_existing:
+            self.db.update_paper(paper_card)
+        else:
+            self.db.insert_paper(paper_card)
+
+        self._emit("graph", f"Paper ready: {paper_card.paper_id}", 30.0,
+                   paper_id=paper_card.paper_id)
 
         # 4. Split into sections
-        sections = split_sections(
-            full_text=result["full_text"],
+        self._emit("sections", "Splitting into sections...", 35.0)
+        sections = split_parsed_document(
+            parsed=parsed,
             paper_id=paper_card.paper_id,
             graph_id=self.graph_id,
-            pages=result["pages"],
         )
+        if not sections:
+            sections = split_sections(
+                full_text=parsed.full_text,
+                paper_id=paper_card.paper_id,
+                graph_id=self.graph_id,
+                pages=parsed.pages,
+                min_section_chars=40,
+            )
+        if parsed.quality_report:
+            self.db.insert_parse_quality_report(
+                paper_card.paper_id, self.graph_id, parsed.quality_report
+            )
         for i, section in enumerate(sections):
             self.db.insert_section(section)
 
@@ -142,28 +224,47 @@ class IngestionPipeline:
                     evidence_json='{"source":"section_splitter"}',
                 ))
         self.db.conn.commit()
+        t_sections = time.monotonic()
+        logger.info("v0.1 sections done: count=%d time=%.1fs",
+                    len(sections), t_sections - t_meta)
+        self._emit("sections", f"{len(sections)} sections created", 42.0,
+                   section_count=len(sections))
 
         # 5. Detect series membership
+        self._emit("series", "Detecting series membership...", 45.0)
         series_info = self._detect_series(paper_card)
+        t_series = time.monotonic()
+        logger.info("v0.1 series done: action=%s time=%.1fs",
+                    series_info.get("action", "?"), t_series - t_sections)
+        self._emit("series", f"Series detection: {series_info.get('action', '?')}", 48.0)
 
+        logger.info("v0.1 complete: total_time=%.1fs paper=%s sections=%d pages=%d",
+                    t_series - t_start, paper_card.paper_id, len(sections), len(parsed.pages))
         return {
             "paper_id": paper_card.paper_id,
             "graph_id": self.graph_id,
             "section_count": len(sections),
-            "page_count": result["page_count"],
+            "page_count": len(parsed.pages),
             "title": paper_card.title,
             "series": series_info,
+            "parser_used": parsed.parser_name,
+            "quality_report": (
+                parsed.quality_report.__dict__ if parsed.quality_report else {}
+            ),
+            "needs_structure_review": (
+                bool(parsed.quality_report.needs_structure_review)
+                if parsed.quality_report else False
+            ),
         }
 
     def run_v0_2(self, paper_id: str) -> dict:
         """v0.2: SectionBlocks -> Claims/Evidence/Limitations/Concepts/Relations."""
+        t0 = time.monotonic()
         sections = self.db.get_sections_by_paper(paper_id)
         stats = {"claims": 0, "evidence": 0, "limitations": 0,
                   "concepts": 0, "relations": 0}
 
-        claim_extractor = ClaimExtractor(self.llm)
-        evidence_extractor = EvidenceExtractor(self.llm)
-        limitation_extractor = LimitationExtractor(self.llm)
+        combined_extractor = CombinedExtractor(self.llm)
         concept_extractor = ConceptExtractor(self.llm)
         relation_linker = RelationLinker(self.llm)
 
@@ -171,80 +272,84 @@ class IngestionPipeline:
         all_evidence = []
         all_limitations = []
 
-        # Phase 1: Extract claims
-        claim_run = ExtractionRun(
+        # Count qualifying sections
+        qual_section_list = []
+        for s in sections:
+            sec = _section_from_dict(s)
+            if len(sec.raw_text) >= 150 and not _is_reserved_structure_section(sec):
+                qual_section_list.append(sec)
+        n_qual = len(qual_section_list) or 1
+
+        # Extraction run for combined claims+evidence+limitations
+        ext_run = ExtractionRun(
             paper_id=paper_id, graph_id=self.graph_id,
             target=ExtractionTarget.CLAIMS, model=self.llm.model,
         )
-        self.db.create_extraction_run(claim_run)
+        self.db.create_extraction_run(ext_run)
 
-        for s in sections:
-            section = _section_from_dict(s)
-            claims = claim_extractor.extract_from_section(section, extraction_run_id=claim_run.run_id)
-            for claim in claims:
-                self.db.insert_claim(claim)
-                self._link_block_to_section(
-                    block_id=claim.claim_id,
-                    block_type="claim",
-                    section_id=claim.section_id,
-                    extraction_run_id=claim_run.run_id,
-                )
-                self._add_to_inbox(claim, paper_id, InboxType.EXTRACTION)
-                all_claims.append(claim)
-                stats["claims"] += 1
+        # Phase 1: Combined claims+evidence+limitations (parallel, 3 workers)
+        completed = 0
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(combined_extractor.extract_from_section, sec, ext_run.run_id): (i, sec)
+                for i, sec in enumerate(qual_section_list)
+            }
+            self._emit("claims",
+                       f"Extracting {n_qual} sections (parallel, combined claims+evidence+limitations)...",
+                       52.0, total=n_qual)
 
-        self.db.complete_extraction_run(claim_run.run_id, items_produced=stats["claims"],
-                                         items_accepted=0, items_rejected=0)
-
-        # Phase 2: Evidence
-        if all_claims:
-            ev_run = ExtractionRun(paper_id=paper_id, graph_id=self.graph_id,
-                                    target=ExtractionTarget.EVIDENCE, model=self.llm.model)
-            self.db.create_extraction_run(ev_run)
-            for s in sections:
-                section = _section_from_dict(s)
-                section_claims = [c for c in all_claims if c.section_id == s["section_id"]]
-                for ev in evidence_extractor.extract_for_claims(section, section_claims, ev_run.run_id):
+            for future in as_completed(futures):
+                i, section = futures[future]
+                result = future.result()
+                for claim in result["claims"]:
+                    self.db.insert_claim(claim)
+                    self._link_block_to_section(block_id=claim.claim_id, block_type="claim",
+                                                section_id=claim.section_id, extraction_run_id=ext_run.run_id)
+                    self._add_to_inbox(claim, paper_id, InboxType.EXTRACTION)
+                    all_claims.append(claim)
+                    stats["claims"] += 1
+                for ev in result["evidence"]:
                     self.db.insert_evidence(ev)
-                    self._link_block_to_section(
-                        block_id=ev.evidence_id,
-                        block_type="evidence",
-                        section_id=ev.section_id,
-                        extraction_run_id=ev_run.run_id,
-                    )
+                    self._link_block_to_section(block_id=ev.evidence_id, block_type="evidence",
+                                                section_id=ev.section_id, extraction_run_id=ext_run.run_id)
                     self._add_to_inbox(ev, paper_id, InboxType.EXTRACTION)
                     all_evidence.append(ev)
                     stats["evidence"] += 1
-            self.db.complete_extraction_run(ev_run.run_id, items_produced=stats["evidence"],
-                                             items_accepted=0, items_rejected=0)
-            for rel in relation_linker.link_evidence_to_claims(all_evidence, all_claims, self.graph_id, ev_run.run_id):
-                self.db.insert_relation(rel)
-                stats["relations"] += 1
-
-        # Phase 3: Limitations
-        if all_claims:
-            lim_run = ExtractionRun(paper_id=paper_id, graph_id=self.graph_id,
-                                     target=ExtractionTarget.LIMITATIONS, model=self.llm.model)
-            self.db.create_extraction_run(lim_run)
-            for s in sections:
-                section = _section_from_dict(s)
-                section_claims = [c for c in all_claims if c.section_id == s["section_id"]]
-                for lim in limitation_extractor.extract_for_claims(section, section_claims, lim_run.run_id):
+                for lim in result["limitations"]:
                     self.db.insert_limitation(lim)
-                    self._link_block_to_section(
-                        block_id=lim.limitation_id,
-                        block_type="limitation",
-                        section_id=lim.section_id,
-                        extraction_run_id=lim_run.run_id,
-                    )
+                    self._link_block_to_section(block_id=lim.limitation_id, block_type="limitation",
+                                                section_id=lim.section_id, extraction_run_id=ext_run.run_id)
                     self._add_to_inbox(lim, paper_id, InboxType.EXTRACTION)
                     all_limitations.append(lim)
                     stats["limitations"] += 1
-            self.db.complete_extraction_run(lim_run.run_id, items_produced=stats["limitations"],
-                                             items_accepted=0, items_rejected=0)
-            for rel in relation_linker.link_limitations_to_claims(all_limitations, all_claims, self.graph_id, lim_run.run_id):
+                completed += 1
+                self._emit("claims",
+                           f"Section {completed}/{n_qual}: {stats['claims']}C/{stats['evidence']}E/{stats['limitations']}L",
+                           52.0 + completed/n_qual * 36.0,
+                           current=completed, total=n_qual, claims=stats["claims"],
+                           evidence=stats["evidence"], limitations=stats["limitations"])
+
+        t_extract = time.monotonic()
+        logger.info("v0.2 extraction done: claims=%d evidence=%d limitations=%d "
+                    "sections=%d time=%.1fs",
+                    stats["claims"], stats["evidence"], stats["limitations"],
+                    completed, t_extract - t0)
+
+        self.db.complete_extraction_run(ext_run.run_id,
+                                         items_produced=stats["claims"] + stats["evidence"] + stats["limitations"],
+                                         items_accepted=0, items_rejected=0)
+
+        # Link evidence/limitations to claims
+        if all_evidence and all_claims:
+            for rel in relation_linker.link_evidence_to_claims(all_evidence, all_claims, self.graph_id, ext_run.run_id):
                 self.db.insert_relation(rel)
                 stats["relations"] += 1
+        if all_limitations and all_claims:
+            for rel in relation_linker.link_limitations_to_claims(all_limitations, all_claims, self.graph_id, ext_run.run_id):
+                self.db.insert_relation(rel)
+                stats["relations"] += 1
+
+        self._emit("concepts", f"Extraction done ({stats['claims']}C/{stats['evidence']}E/{stats['limitations']}L), extracting concepts...", 88.0)
 
         # Phase 4: Concepts + normalization
         if all_claims:
@@ -257,6 +362,7 @@ class IngestionPipeline:
                 self._add_to_inbox(concept, paper_id, InboxType.CONCEPT)
                 stats["concepts"] += 1
 
+            self._emit("concepts", f"Normalizing {len(concepts)} concepts...", 88.0)
             normalizer = ConceptNormalizer(self.db, ConceptRegistry(self.db))
             norm_stats = normalizer.normalize_extraction(
                 candidate_concepts=concepts, claims=all_claims,
@@ -269,11 +375,18 @@ class IngestionPipeline:
                                              items_rejected=0)
 
         # Phase 5: Claim-to-claim relations
+        self._emit("relations", f"Linking {len(all_claims)} claims...", 92.0)
         if len(all_claims) >= 2:
-            for rel in relation_linker.link_claims(all_claims, self.graph_id, claim_run.run_id):
+            for rel in relation_linker.link_claims(all_claims, self.graph_id, ext_run.run_id):
                 self.db.insert_relation(rel)
                 stats["relations"] += 1
 
+        self._emit("v02_done",
+                   f"Extraction complete: {stats['claims']}C/{stats['evidence']}E/{stats['limitations']}L/{stats['concepts']}K",
+                   96.0, **stats)
+        logger.info("v0.2 complete: total_time=%.1fs claims=%d evidence=%d limitations=%d concepts=%d relations=%d",
+                    time.monotonic() - t0, stats["claims"], stats["evidence"],
+                    stats["limitations"], stats["concepts"], stats["relations"])
         return stats
 
     def _link_block_to_section(
@@ -307,6 +420,16 @@ class IngestionPipeline:
         return {**v01, **v02}
 
     def _add_to_inbox(self, item, paper_id: str, inbox_type: InboxType):
+        """Auto-approve high-confidence items, only flag low-confidence for review."""
+        conf = getattr(item, 'extraction_confidence', 0.5)
+        # Auto-approve: confidence >= 0.7
+        if conf >= 0.7:
+            return  # Skip inbox entirely — item is auto-approved
+        # Auto-approve with downgrade: 0.5 <= conf < 0.7
+        if conf >= 0.5:
+            return  # Also skip — medium confidence still auto-approved
+
+        # Only low-confidence items (<0.5) go to inbox for review
         item_type = item.__class__.__name__.replace("Block", "").replace("Key", "").lower()
         title = (getattr(item, 'claim_text', '') or getattr(item, 'evidence_text', '') or
                  getattr(item, 'limitation_text', '') or getattr(item, 'label_zh', '') or "")[:100]
@@ -315,12 +438,11 @@ class IngestionPipeline:
 
         inbox = ReviewInboxItem(
             inbox_type=inbox_type, item_id=item_id, item_type=item_type,
-            title=title, extraction_confidence=getattr(item, 'extraction_confidence', 0.5),
-            priority=InboxPriority.MEDIUM,
+            title=title, extraction_confidence=conf,
+            priority=InboxPriority.LOW,
             extraction_run_id=getattr(item, 'extraction_run_id', None),
             graph_id=self.graph_id, paper_id=paper_id,
-            suggested_actions=[InboxDecision.APPROVE, InboxDecision.EDIT,
-                                InboxDecision.REJECT, InboxDecision.DOWNGRADE_CONFIDENCE],
+            suggested_actions=[InboxDecision.APPROVE, InboxDecision.REJECT],
         )
         self.db.insert_inbox_item(inbox)
 
@@ -339,3 +461,11 @@ def _section_from_dict(d: dict):
         raw_text=d.get("raw_text", ""), summary=d.get("summary", ""),
         page_start=d.get("page_start"), page_end=d.get("page_end"),
     )
+
+
+def _is_reserved_structure_section(section) -> bool:
+    import re
+    if not section.heading_path:
+        return False
+    label = re.sub(r"\s+", "", section.heading_path[0] or "")
+    return label in {"目录", "前言", "编写说明"}

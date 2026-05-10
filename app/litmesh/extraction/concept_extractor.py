@@ -196,8 +196,8 @@ def _canonical_slug(namespace: ConceptNamespace, term: str, english_term: str) -
     """Generate stable routing keys from controlled terms, not copied sentences."""
     if namespace == ConceptNamespace.FRAMEWORK:
         framework = term.upper().replace(" ", "_").replace("-", "_")
-        if len(framework) <= 24 and all(c.isalnum() or c == "_" for c in framework):
-            return framework
+        framework = framework[:20]
+        return framework
     if term in _KNOWN_SLUGS:
         return _KNOWN_SLUGS[term]
     if english_term:
@@ -208,4 +208,4 @@ def _canonical_slug(namespace: ConceptNamespace, term: str, english_term: str) -
 def _ascii_slug(text: str) -> str:
     import re
     slug = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
-    return slug[:64] or _slugify(text)
+    return slug[:25] or _slugify(text)

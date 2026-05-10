@@ -33,6 +33,7 @@ class HybridRetriever:
         include_limitations: bool = True,
         include_context_blocks: bool = True,
         context_window: int = 1,
+        max_context_blocks: int = 10,
         gate_kwargs: dict | None = None,
     ) -> dict:
         """Run hybrid retrieval.
@@ -44,6 +45,7 @@ class HybridRetriever:
                 "limitations": [...],
                 "concepts": [...],
                 "context_blocks": [...],
+                "fallback_reason": str,
                 "decision": GateDecision,
                 "method": "vector" | "fts" | "graph" | "combined",
             }
@@ -127,13 +129,21 @@ class HybridRetriever:
         # 7. If structured traversal found too little, fall back to paragraph
         # context walking. This is traditional RAG-like chunk traversal, but it
         # is still bounded by graph scope and paragraph window.
+        fallback_reason = ""
         if include_context_blocks and len(all_claims) + len(all_evidence) + len(all_limitations) < 2:
+            fallback_reason = (
+                f"Structured traversal returned only "
+                f"{len(all_claims)} claims, {len(all_evidence)} evidence, "
+                f"{len(all_limitations)} limitations. Falling back to paragraph context."
+            )
             for block in self.retrieve_context_blocks(
                 query=query,
                 graph_scope=graph_scope,
-                top_k=top_k,
+                top_k=max_context_blocks,
                 window=context_window,
             ):
+                if len(context_blocks) >= max_context_blocks:
+                    break
                 context_blocks[block["section_id"]] = block
             if context_blocks and method not in ("full", "chunk_walk"):
                 method = f"{method}+chunk_walk" if method != "skip" else "chunk_walk"
@@ -144,6 +154,7 @@ class HybridRetriever:
             "limitations": list(all_limitations.values()),
             "concepts": concepts,
             "context_blocks": list(context_blocks.values()),
+            "fallback_reason": fallback_reason,
             "decision": decision,
             "method": method,
         }

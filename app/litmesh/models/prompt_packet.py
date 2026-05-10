@@ -156,6 +156,28 @@ class PacketClaim(BaseModel):
     is_cross_graph: bool = False
 
 
+class FallbackContextBlock(BaseModel):
+    """Raw paragraph context used when structured traversal returns insufficient results.
+
+    These are NOT reviewed claims. They are traditional RAG chunks that
+    the model should treat as raw source text, not verified knowledge.
+    """
+    section_id: str
+    heading: str = ""
+    raw_text: str = ""
+    page_start: int = 0
+    page_end: int = 0
+    source: str = "chunk_walk"
+    paper_id: str = ""
+
+
+class ContextBlockPolicy(str, Enum):
+    """How the model should treat fallback context blocks."""
+    IGNORE = "ignore"           # Don't include fallback blocks
+    APPEND_AS_RAW = "append_as_raw"  # Append as raw text, clearly labeled
+    INLINE_CITED = "inline_cited"    # Inline with citation, like a claim
+
+
 class PromptPacket(BaseModel):
     """The final compiled context package delivered to the reasoning model.
 
@@ -186,6 +208,11 @@ class PromptPacket(BaseModel):
 
     # Cross-graph bridges used
     bridge_relations: list[dict] = Field(default_factory=list)
+
+    # Fallback context blocks (raw RAG-style paragraphs, not reviewed claims)
+    fallback_context_blocks: list[FallbackContextBlock] = Field(default_factory=list)
+    fallback_reason: str = ""
+    context_block_policy: ContextBlockPolicy = ContextBlockPolicy.APPEND_AS_RAW
 
     # Instructions to the model
     generation_policy: GenerationPolicy = Field(default_factory=GenerationPolicy)

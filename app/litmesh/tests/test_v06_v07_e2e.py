@@ -364,3 +364,288 @@ class TestCrossGraphQuery:
             graphs_visited.add(node.graph_id)
 
         assert result["stats"]["nodes_visited"] >= 1
+
+
+# ============================================================
+# v0.9: Traversal index layer tests
+# ============================================================
+
+@pytest.fixture
+def corpus(db):
+    from app.litmesh.models.corpus import CorpusCard
+    c = CorpusCard(name="Test Corpus", corpus_type="paper_collection", domain="test")
+    db.insert_corpus(c)
+    return c
+
+
+@pytest.fixture
+def graph(db, corpus):
+    from app.litmesh.models.graph import SeriesGraph
+    g = SeriesGraph(
+        corpus_id=corpus.corpus_id, name="Test Graph",
+        graph_type="paper_collection", domain="test",
+    )
+    db.insert_graph(g)
+    return g
+
+
+@pytest.fixture
+def paper(db, graph):
+    from app.litmesh.models.paper import PaperCard
+    p = PaperCard(
+        graph_id=graph.graph_id, title="Test Paper",
+        source_file="test.pdf",
+    )
+    db.insert_paper(p)
+    return p
+
+
+@pytest.fixture
+def section(db, graph, paper):
+    from app.litmesh.models.section import SectionBlock, HeadingLevel
+    s = SectionBlock(
+        graph_id=graph.graph_id, paper_id=paper.paper_id,
+        heading="Test Section", heading_path=["Test Section"],
+        heading_level=HeadingLevel.SECTION,
+        raw_text="Test paragraph text.", page_start=1,
+    )
+    db.insert_section(s)
+    return s
+
+
+@pytest.fixture
+def retrieval_setup(db, graph, paper, section):
+    """Setup with claims, evidence, sections for retrieval tests."""
+    from app.litmesh.models.claim import ClaimBlock, ClaimType
+    from app.litmesh.models.evidence import EvidenceBlock, EvidenceType
+
+    c = ClaimBlock(
+        graph_id=graph.graph_id, paper_id=paper.paper_id,
+        section_id=section.section_id,
+        claim_text="Virtual experiments improve learning outcomes.",
+        claim_type=ClaimType.EMPIRICAL,
+    )
+    db.insert_claim(c)
+
+    ev = EvidenceBlock(
+        graph_id=graph.graph_id, paper_id=paper.paper_id,
+        section_id=section.section_id,
+        evidence_text="Study shows 20% improvement.",
+        evidence_type=EvidenceType.DATA,
+    )
+    db.insert_evidence(ev)
+
+    return db, graph.graph_id
+
+
+class TestNodeIndex:
+    """Tests for node_index and related index tables."""
+
+    def test_schema_has_node_index_table(self, db):
+        """node_index table exists after schema init."""
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='node_index'"
+        ).fetchone()
+        assert row is not None
+
+    def test_schema_has_block_concepts_table(self, db):
+        """block_concepts table exists."""
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='block_concepts'"
+        ).fetchone()
+        assert row is not None
+
+    def test_schema_has_claim_evidence_links(self, db):
+        """claim_evidence_links table exists."""
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='claim_evidence_links'"
+        ).fetchone()
+        assert row is not None
+
+    def test_schema_has_claim_limitation_links(self, db):
+        """claim_limitation_links table exists."""
+        row = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='claim_limitation_links'"
+        ).fetchone()
+        assert row is not None
+
+    def test_insert_claim_writes_node_index(self, db, graph, section):
+        """insert_claim syncs to node_index."""
+        from app.litmesh.models.claim import ClaimBlock, ClaimType
+        claim = ClaimBlock(
+            graph_id=graph.graph_id, paper_id=section.paper_id,
+            section_id=section.section_id, claim_text="Test claim",
+            claim_type=ClaimType.THEORETICAL,
+        )
+        db.insert_claim(claim)
+        assert db.get_node_type(claim.claim_id) == "claim"
+
+    def test_insert_evidence_writes_node_index(self, db, graph, section):
+        """insert_evidence syncs to node_index."""
+        from app.litmesh.models.evidence import EvidenceBlock, EvidenceType
+        ev = EvidenceBlock(
+            graph_id=graph.graph_id, paper_id=section.paper_id,
+            section_id=section.section_id, evidence_text="Test evidence",
+            evidence_type=EvidenceType.OTHER,
+        )
+        db.insert_evidence(ev)
+        assert db.get_node_type(ev.evidence_id) == "evidence"
+
+    def test_insert_section_writes_node_index(self, db, graph, paper):
+        """insert_section syncs to node_index."""
+        from app.litmesh.models.section import SectionBlock, HeadingLevel
+        sec = SectionBlock(
+            graph_id=graph.graph_id, paper_id=paper.paper_id,
+            heading="Test", heading_path=["Test"],
+            heading_level=HeadingLevel.SECTION,
+            raw_text="Some section text.",
+            page_start=1, page_end=1,
+        )
+        db.insert_section(sec)
+        assert db.get_node_type(sec.section_id) == "section"
+
+    def test_batch_resolve_returns_types(self, db, graph, section):
+        """batch_resolve_nodes returns correct type dict."""
+        from app.litmesh.models.claim import ClaimBlock, ClaimType
+        c = ClaimBlock(
+            graph_id=graph.graph_id, paper_id=section.paper_id,
+            section_id=section.section_id, claim_text="C",
+            claim_type=ClaimType.THEORETICAL,
+        )
+        db.insert_claim(c)
+        resolved = db.batch_resolve_nodes([c.claim_id, section.section_id, "nonexistent"])
+        assert resolved.get(c.claim_id) == "claim"
+        assert resolved.get(section.section_id) == "section"
+        assert "nonexistent" not in resolved
+
+    def test_link_block_concept(self, db, graph):
+        """link_block_concept creates block_concepts entry."""
+        db.link_block_concept("concept:test", "block_1", "claim", graph.graph_id)
+        block_concepts = db.get_concepts_for_block("block_1")
+        assert "concept:test" in block_concepts
+
+    def test_link_claim_evidence(self, db, graph):
+        """link_claim_evidence creates link entry."""
+        db.link_claim_evidence("claim_1", "evidence_1", graph.graph_id)
+        ev_ids = db.get_evidence_for_claim("claim_1")
+        assert "evidence_1" in ev_ids
+
+    def test_get_node_type_returns_none_for_unknown(self, db):
+        """get_node_type returns None for unindexed nodes."""
+        assert db.get_node_type("nonexistent_id") is None
+
+    def test_node_index_upsert_updates_type(self, db, graph):
+        """upsert_node_index updates existing entry."""
+        db.upsert_node_index("node_x", "claim", graph.graph_id)
+        assert db.get_node_type("node_x") == "claim"
+        db.upsert_node_index("node_x", "evidence", graph.graph_id)
+        assert db.get_node_type("node_x") == "evidence"
+
+
+class TestPriorityTraversal:
+    """Tests for priority-based BFS traversal."""
+
+    def test_graph_scope_filters_nodes(self, db, graph, section):
+        """Nodes outside graph_scope are excluded."""
+        from app.litmesh.models.claim import ClaimBlock, ClaimType
+        from app.litmesh.models.graph import SeriesGraph
+        from app.litmesh.traversal.traversal_executor import TraversalExecutor
+        from app.litmesh.models.prompt_packet import TraversalPlan, TraversalMode
+
+        # Create second graph + paper + section (use corpus fixture's corpus)
+        from app.litmesh.models.corpus import CorpusCard
+        c2 = CorpusCard(name="C2", corpus_type="paper_collection", domain="test")
+        db.insert_corpus(c2)
+        g2 = SeriesGraph(corpus_id=c2.corpus_id, name="G2")
+        db.insert_graph(g2)
+        from app.litmesh.models.paper import PaperCard
+        p2 = PaperCard(graph_id=g2.graph_id, title="P2", source_file="t.pdf")
+        db.insert_paper(p2)
+        from app.litmesh.models.section import SectionBlock, HeadingLevel
+        s2 = SectionBlock(graph_id=g2.graph_id, paper_id=p2.paper_id, heading="S2",
+                          heading_path=["S2"], heading_level=HeadingLevel.SECTION,
+                          raw_text="text", page_start=1)
+        db.insert_section(s2)
+
+        c_a = ClaimBlock(graph_id=graph.graph_id, paper_id=section.paper_id,
+                         section_id=section.section_id, claim_text="In scope",
+                         claim_type=ClaimType.THEORETICAL)
+        c_b = ClaimBlock(graph_id=g2.graph_id, paper_id=p2.paper_id,
+                         section_id=s2.section_id, claim_text="Out of scope",
+                         claim_type=ClaimType.THEORETICAL)
+        db.insert_claim(c_a); db.insert_claim(c_b)
+
+        plan = TraversalPlan(
+            task_type="test", start_nodes=[c_a.claim_id, c_b.claim_id],
+            graph_scope=[graph.graph_id], pointer_types=[],
+            traversal_mode=TraversalMode.EXPLAIN, max_depth=0,
+            require_source_span=False,
+        )
+        executor = TraversalExecutor(db)
+        result = executor.execute(plan)
+
+        graph_ids = {n.graph_id for n in result.visited_nodes}
+        assert graph.graph_id in graph_ids
+        assert g2.graph_id not in graph_ids
+
+    def test_require_source_span_skips_unlinked_clains(self, db, graph, section):
+        """require_source_span=True skips claims without source_span_id."""
+        from app.litmesh.models.claim import ClaimBlock, ClaimType
+        from app.litmesh.traversal.traversal_executor import TraversalExecutor
+        from app.litmesh.models.prompt_packet import TraversalPlan, TraversalMode
+
+        c = ClaimBlock(
+            graph_id=graph.graph_id, paper_id=section.paper_id,
+            section_id=section.section_id, claim_text="No span",
+            claim_type=ClaimType.THEORETICAL, source_span_id=None,
+        )
+        db.insert_claim(c)
+
+        plan = TraversalPlan(
+            task_type="test", start_nodes=[c.claim_id],
+            graph_scope=[graph.graph_id], pointer_types=[],
+            traversal_mode=TraversalMode.EXPLAIN, max_depth=0,
+            require_source_span=True,
+        )
+        executor = TraversalExecutor(db)
+        result = executor.execute(plan)
+        assert c.claim_id not in [n.node_id for n in result.visited_nodes]
+
+
+class TestFallbackContext:
+    """Tests for paragraph fallback context blocks."""
+
+    def test_fallback_reason_when_structured_thin(self, db, retrieval_setup):
+        """fallback_reason is populated when structured results are thin."""
+        db, graph_id = retrieval_setup
+        from app.litmesh.retrieval.hybrid_retriever import HybridRetriever
+        retriever = HybridRetriever(db)
+        result = retriever.retrieve(
+            "nonexistent query term",
+            [graph_id], top_k=5,
+            include_context_blocks=True, context_window=1, max_context_blocks=3,
+        )
+        assert "fallback_reason" in result
+        if result["fallback_reason"]:
+            assert "Structured traversal" in result["fallback_reason"]
+            assert len(result["context_blocks"]) <= 3
+
+    def test_fallback_blocks_in_prompt_packet(self, db):
+        """PromptPacket includes fallback_context_blocks."""
+        from app.litmesh.models.prompt_packet import PromptPacket, FallbackContextBlock, ContextBlockPolicy
+
+        pkt = PromptPacket(
+            current_user_query="test query",
+            fallback_context_blocks=[
+                FallbackContextBlock(
+                    section_id="sec_1", heading="Test Section",
+                    raw_text="Raw paragraph text", page_start=1, page_end=1,
+                )
+            ],
+            fallback_reason="Structured traversal returned 0 claims.",
+            context_block_policy=ContextBlockPolicy.APPEND_AS_RAW,
+        )
+        assert len(pkt.fallback_context_blocks) == 1
+        assert pkt.fallback_context_blocks[0].raw_text == "Raw paragraph text"
+        assert pkt.context_block_policy == ContextBlockPolicy.APPEND_AS_RAW
+        assert "0 claims" in pkt.fallback_reason

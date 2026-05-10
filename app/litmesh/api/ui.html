@@ -76,6 +76,16 @@ select:focus{outline:none;border-color:var(--accent)}
 .graph-tooltip{position:absolute;pointer-events:none;background:var(--raised);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:12px;max-width:320px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,0.4);display:none}
 .graph-tooltip .tt-type{font-weight:600;margin-bottom:2px}
 .graph-tooltip .tt-text{color:var(--fg2);font-size:11px;line-height:1.5;max-height:80px;overflow:hidden}
+.ext-progress{height:4px;background:var(--border);border-radius:2px;margin:6px 0 8px 0;overflow:hidden}
+.ext-bar{height:100%;border-radius:2px;transition:width 0.8s ease}
+.card-pending{border-color:rgba(108,140,255,0.3);animation:pulse-border 2s ease-in-out infinite}
+@keyframes pulse-border{0%,100%{border-color:rgba(108,140,255,0.3)}50%{border-color:rgba(108,140,255,0.6)}}
+.task-progress{margin:8px 0}
+.task-progress .tp-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;margin:4px 0}
+.task-progress .tp-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width 0.5s ease}
+.task-progress .tp-info{display:flex;justify-content:space-between;font-size:11px;color:var(--fg2)}
+.task-progress .tp-stage{color:var(--accent);font-weight:500}
+.task-progress .tp-detail{font-size:10px;color:var(--fg3);margin-top:2px}
 .inbox-item{border-left:3px solid var(--border);padding:12px 16px;margin-bottom:8px;border-radius:0 var(--radius) var(--radius) 0;background:var(--surface)}
 .inbox-item.critical{border-left-color:var(--red)}
 .inbox-item.high{border-left-color:var(--orange)}
@@ -85,6 +95,7 @@ select:focus{outline:none;border-color:var(--accent)}
 .toast-ok{background:var(--green);color:#000}
 .toast-err{background:var(--red);color:#fff}
 @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
 .empty-state{padding:60px 24px;text-align:center;color:var(--fg3)}
 .empty-state .icon{font-size:48px;margin-bottom:12px}
 .empty-state p{font-size:14px;margin-bottom:4px}
@@ -108,18 +119,12 @@ pre{background:var(--raised);padding:14px;border-radius:8px;overflow:auto;font-s
 <body>
 <header>
   <h1><span class="logo">L</span>LitMesh</h1>
-  <div id="global-progress">
-    <div class="gp-title" id="gp-title"></div>
-    <div class="gp-bar"><div class="gp-bar-fill" id="gp-bar" style="width:0%"></div></div>
-    <div class="gp-steps" id="gp-steps"></div>
-  </div>
   <span id="stat-summary" style="font-size:12px;color:var(--fg2)"></span>
 </header>
 <nav id="tabs">
   <button data-panel="papers" class="active">论文</button>
   <button data-panel="series-graph">系列图</button>
   <button data-panel="bridge-graph">桥接图</button>
-  <button data-panel="inbox">审核</button>
   <button data-panel="stats">统计</button>
 </nav>
 <main id="content"></main>
@@ -145,31 +150,20 @@ function toast(msg,ok){const t=document.createElement('div');t.className='toast 
 // Tab switching
 $$('#tabs button').forEach(btn=>{btn.addEventListener('click',()=>{$$('#tabs button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');loadPanel(btn.dataset.panel)})});
 
-async function loadPanel(name){
+async function loadPanel(name, opts={}){
   const m=$('#content');m.innerHTML='<p style="color:var(--fg2)">加载中...</p>';
   try{
     if(name==='papers')await renderPapers(m);
-    else if(name==='series-graph')await renderSeriesGraph(m);
+    else if(name==='series-graph')await renderSeriesGraph(m, opts);
     else if(name==='bridge-graph')await renderBridgeGraph(m);
-    else if(name==='inbox')await renderInbox(m);
     else if(name==='stats')await renderStats(m);
   }catch(e){m.innerHTML=`<p style="color:var(--red)">错误: ${esc(e.message)}</p>`}
 }
 
-// ---- Global progress ----
-const STEPS=[{k:'corpus',l:'语料库',p:10},{k:'graph',l:'系列图',p:25},{k:'upload',l:'上传',p:40},{k:'meta',l:'元数据',p:55},{k:'sections',l:'章节',p:70},{k:'spans',l:'锚定',p:85},{k:'done',l:'完成',p:100}];
-function globalProgress(idx){
-  const gp=document.getElementById('global-progress'),title=document.getElementById('gp-title'),bar=document.getElementById('gp-bar'),steps=document.getElementById('gp-steps');
-  if(!gp)return;
-  if(idx===-1){gp.style.display='none';return}
-  gp.style.display='block';
-  const s=STEPS[Math.min(idx,STEPS.length-1)];
-  title.textContent='导入中: '+s.l;bar.style.width=s.p+'%';
-  steps.innerHTML=STEPS.map((st,i)=>{
-    let c=i<idx?'gp-s-done':i===idx?'gp-s-active':'gp-s-pending';
-    return `<span class="${c}">${st.l}</span>`;
-  }).join('');
-}
+// ---- Pending task cards (in-card progress) ----
+window._pendingTasks = window._pendingTasks || {};
+
+const STAGE_LABELS = {parsing:'解析PDF',metadata:'元数据',graph:'建图',sections:'分章节',series:'系列',claims:'论点',evidence:'证据',limitations:'局限',concepts:'概念',relations:'关联',v02_done:'完成',done:'完成'};
 
 function onFileSel(f){
   if(!f)return;if(!f.name.toLowerCase().endsWith('.pdf'))return toast('仅支持 PDF',false);
@@ -177,32 +171,150 @@ function onFileSel(f){
   document.getElementById('fn').textContent='已选择: '+f.name+' ('+(f.size/1024).toFixed(0)+' KB)';
   window._file=f;
 }
+
+function createPendingCard(taskId, fileName) {
+  const card = document.createElement('div');
+  card.id = 'task-' + taskId;
+  card.className = 'card card-pending';
+  card.innerHTML =
+    '<h3>'+esc(fileName)+' <span class="badge bg-orange" style="animation:pulse 1.5s ease-in-out infinite">处理中</span></h3>'+
+    '<div class="task-progress">'+
+      '<div class="tp-bar"><div class="tp-fill" style="width:0%"></div></div>'+
+      '<div class="tp-info"><span class="tp-stage">准备中...</span><span class="tp-pct">0%</span></div>'+
+      '<div class="tp-detail"></div>'+
+    '</div>';
+  return card;
+}
+
+function updatePendingCard(taskId, stage, pct, message, metadata) {
+  const card = document.getElementById('task-' + taskId);
+  if (!card) return;
+  const fill = card.querySelector('.tp-fill');
+  const stageEl = card.querySelector('.tp-stage');
+  const pctEl = card.querySelector('.tp-pct');
+  const detail = card.querySelector('.tp-detail');
+  if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (stageEl) stageEl.textContent = STAGE_LABELS[stage] || stage || '';
+  if (pctEl) pctEl.textContent = Math.round(pct) + '%';
+  if (detail && message) detail.textContent = message;
+  // Update title when metadata arrives
+  if (metadata && metadata.title && card.querySelector('h3')) {
+    const badge = card.querySelector('.badge');
+    card.querySelector('h3').innerHTML = esc(metadata.title) + ' ' + (badge ? badge.outerHTML : '');
+  }
+}
+
+function finishPendingCard(taskId, metadata) {
+  const card = document.getElementById('task-' + taskId);
+  if (!card) return;
+  card.classList.remove('card-pending');
+  card.classList.add('card');
+  const fill = card.querySelector('.tp-fill');
+  if (fill) { fill.style.width = '100%'; fill.style.background = 'var(--green)'; }
+  const stageEl = card.querySelector('.tp-stage');
+  if (stageEl) { stageEl.textContent = '完成'; stageEl.style.color = 'var(--green)'; }
+  const pctEl = card.querySelector('.tp-pct');
+  if (pctEl) pctEl.textContent = '100%';
+  const detail = card.querySelector('.tp-detail');
+  if (detail) detail.textContent = (metadata && metadata.stats) ?
+    '论点:'+(metadata.stats.claims||0)+' 证据:'+(metadata.stats.evidence||0)+' 局限:'+(metadata.stats.limitations||0)+' 概念:'+(metadata.stats.concepts||0) : '';
+  const h3 = card.querySelector('h3');
+  if (h3) {
+    const badge = h3.querySelector('.badge');
+    if (badge) { badge.className = 'badge bg-green'; badge.textContent = '已完成'; badge.style.animation = ''; }
+  }
+}
+
+function failPendingCard(taskId, message) {
+  const card = document.getElementById('task-' + taskId);
+  if (!card) return;
+  card.classList.remove('card-pending');
+  card.style.borderColor = 'var(--red)';
+  const fill = card.querySelector('.tp-fill');
+  if (fill) { fill.style.width = '100%'; fill.style.background = 'var(--red)'; }
+  const stageEl = card.querySelector('.tp-stage');
+  if (stageEl) { stageEl.textContent = '失败'; stageEl.style.color = 'var(--red)'; }
+  const detail = card.querySelector('.tp-detail');
+  if (detail) detail.textContent = message || '';
+  const badge = card.querySelector('.badge');
+  if (badge) { badge.className = 'badge bg-red'; badge.textContent = '失败'; badge.style.animation = ''; }
+}
+
 async function doImport(){
   if(!window._file)return toast('请先选择 PDF',false);
-  const fn=window._file.name.replace(/\.pdf$/i,''),btn=document.getElementById('btn-imp'),st=document.getElementById('imp-status');
+  const btn=document.getElementById('btn-imp'),st=document.getElementById('imp-status');
   btn.disabled=true;
   try{
-    globalProgress(0);
-    const cr=await fetchJSON(API+'corpora',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:fn,domain:'import'})});
-    globalProgress(1);
-    const gr=await fetchJSON(API+'graphs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({corpus_id:cr.corpus_id,name:fn,concept_namespace:fn.toLowerCase()})});
-    globalProgress(2);
     const fd=new FormData();fd.append('file',window._file);
-    const r=await fetch(API+'papers/upload?graph_id='+encodeURIComponent(gr.graph_id),{method:'POST',body:fd});
+    const r=await fetch(API+'papers/upload',{method:'POST',body:fd});
     const data=await r.json();
-    if(r.ok){
-      globalProgress(6);
-      st.innerHTML='<span style="color:var(--green)">✓ 导入完成</span> 论文: '+data.paper_id+', '+data.section_count+' 章节';
-      toast('导入完成',true);setTimeout(()=>{globalProgress(-1);loadPanel('papers')},2000);
-    }else{globalProgress(-1);st.innerHTML='<span style="color:var(--red)">失败:</span> '+esc(data.detail||'')}
-  }catch(e){globalProgress(-1);st.innerHTML='<span style="color:var(--red)">错误:</span> '+esc(e.message)}
-  finally{btn.disabled=false}
+    if(!r.ok)throw new Error(data.detail||'Upload failed');
+
+    const taskId = data.task_id;
+    const paperId = data.paper_id;
+    const graphId = data.graph_id;
+    const fileName = data.file || window._file.name;
+
+    // Add placeholder paper to the papers list so it survives refresh
+    window._papers = window._papers || [];
+    window._papers.unshift({
+      paper_id: paperId, graph_id: graphId,
+      title: fileName, main_framework: 'processing',
+      page_count: 0, year: '',
+    });
+
+    // Immediately show a card in the paper list
+    renderPaperList();
+
+    // Also show in imp-status
+    st.innerHTML = '<span style="color:var(--accent)">处理中...</span>';
+
+    // Track this task - SSE updates the card
+    window._pendingTasks[taskId] = { paperId, card: null, fileName, taskId };
+
+    // Connect SSE
+    const evtSource = new EventSource(API+'tasks/'+taskId+'/events');
+
+    evtSource.addEventListener('message', (e) => {
+      const ev = JSON.parse(e.data);
+      updatePendingCard(taskId, ev.stage, ev.percentage, ev.message, ev.metadata);
+      // Update paper title in the array when metadata arrives
+      if (ev.metadata && ev.metadata.title && window._papers) {
+        const p = window._papers.find(p => p.paper_id === paperId);
+        if (p) { p.title = ev.metadata.title; renderPaperList(); restorePendingCards(); }
+      }
+    });
+
+    evtSource.addEventListener('complete', (e) => {
+      evtSource.close();
+      const ev = JSON.parse(e.data);
+      finishPendingCard(taskId, ev.metadata);
+      st.innerHTML = '<span style="color:var(--green)">✓ 导入完成</span> '+(ev.metadata.title||'');
+      toast('导入完成!', true);
+      setTimeout(() => { delete window._pendingTasks[taskId]; loadPanel('papers'); }, 2500);
+    });
+
+    evtSource.addEventListener('error', (e) => {
+      evtSource.close();
+      failPendingCard(taskId, '处理失败');
+      st.innerHTML = '<span style="color:var(--red)">处理失败</span>';
+      toast('处理失败', false);
+    });
+
+  } catch(e) {
+    st.innerHTML = '<span style="color:var(--red)">错误:</span> '+esc(e.message);
+  } finally { btn.disabled = false; }
 }
 
 // ---- Papers (combined with Import) ----
 async function renderPapers(m){
-  const data=await fetchJSON(API+'papers');
-  let importHTML=`<details id="import-toggle" style="margin-bottom:20px"><summary style="cursor:pointer;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:12px">+ 导入新论文</summary>
+  let data;
+  try{data=await fetchJSON(API+'papers')}catch(e){m.innerHTML='<p style="color:var(--red)">加载失败: '+esc(e.message)+'</p>';return}
+  window._paperStatuses=window._paperStatuses||{};
+  window._papers=data.papers||[];
+
+  m.innerHTML=`<h2>论文 <span style="color:var(--fg2);font-size:14px;font-weight:400">${data.count} 篇</span></h2>
+    <details id="import-toggle" style="margin-bottom:20px"><summary style="cursor:pointer;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:12px">+ 导入新论文</summary>
     <div class="file-drop" id="file-drop" onclick="document.getElementById('fi').click()">
       <div class="icon">📄</div><div class="label">拖拽 PDF 到此处</div><div class="hint">最大 50MB · 自动解析</div>
       <input type="file" id="fi" accept=".pdf,application/pdf" onchange="onFileSel(this.files[0])">
@@ -212,15 +324,39 @@ async function renderPapers(m){
       <button class="btn btn-success" id="btn-imp" onclick="doImport()" style="padding:10px 28px;font-size:14px">导入 PDF</button>
       <span id="imp-status" style="font-size:12px;color:var(--fg2)"></span>
     </div>
-  </details>`;
-
-  m.innerHTML=`<h2>论文 <span style="color:var(--fg2);font-size:14px;font-weight:400">${data.count} 篇</span></h2>
-    ${importHTML}
+  </details>
     <div class="search-box"><input id="fp" placeholder="搜索标题..." oninput="renderPaperList()"></div>
     <div id="paper-list"></div>`;
-  window._papers=data.papers;renderPaperList();
 
-  // Bind import events
+  renderPaperList();
+  bindImportEvents();
+  // Re-insert pending task cards (they get wiped by innerHTML)
+  restorePendingCards();
+  // Lazy load statuses
+  setTimeout(()=>{
+    (window._papers||[]).forEach(p=>{
+      fetch(API+'papers/'+p.paper_id+'/extraction-status').then(r=>r.json()).then(s=>{
+        window._paperStatuses[p.paper_id]=s;
+        renderPaperList();
+        restorePendingCards();
+      }).catch(()=>{});
+    });
+  },200);
+}
+
+function restorePendingCards(){
+  const list = document.getElementById('paper-list');
+  if (!list) return;
+  const tasks = window._pendingTasks || {};
+  // Re-attach pending cards (they were detached when innerHTML replaced content)
+  for (const [taskId, task] of Object.entries(tasks)) {
+    if (task.card && task.card.parentNode !== list) {
+      list.insertBefore(task.card, list.firstChild);
+    }
+  }
+}
+
+function bindImportEvents(){
   setTimeout(()=>{
     const d=document.getElementById('file-drop');
     if(!d)return;
@@ -229,21 +365,49 @@ async function renderPapers(m){
     d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('dragover');const f=e.dataTransfer.files[0];if(f){document.getElementById('fi').files=e.dataTransfer.files;onFileSel(f)}});
   },100);
 }
+
 function renderPaperList(){
+  const el=document.getElementById('paper-list');
+  if(!el)return;
   const q=(document.getElementById('fp')?.value||'').toLowerCase();
-  const ps=(window._papers||[]).filter(p=>!q||p.title.toLowerCase().includes(q));
-  document.getElementById('paper-list').innerHTML=ps.map(p=>`
-    <div class="card">
-      <h3>${esc(p.title)}</h3>
-      <div class="meta">${esc(p.authors)} · ${p.year||'?'} · ${badge(p.research_type,'dim')} · ${esc(p.main_framework)}</div>
-      <div class="meta">ID: ${esc(p.paper_id)} · 图: ${esc(p.graph_id)} · ${p.page_count}页</div>
-      <div class="text">${esc((p.abstract||p.abstract_summary||'').substring(0,200))}</div>
-      <div class="actions">
-        <button class="btn btn-sm" onclick="viewPaperDetail('${p.paper_id}')">详情</button>
-        <button class="btn btn-sm btn-primary" onclick="viewPaperGraph('${p.graph_id}','${p.paper_id}')">查看图谱</button>
-        <button class="btn btn-sm" style="background:var(--accent);color:#fff" onclick="extractPaper('${p.paper_id}','${p.graph_id}')">抽取论点</button>
-      </div>
-    </div>`).join('')||'<div class="empty-state"><div class="icon">📭</div><p>暂无论文</p><p style="color:var(--fg3)">去导入页面上传 PDF</p></div>';
+  const ps=(window._papers||[]).filter(p=>!q||(p.title||'').toLowerCase().includes(q));
+  const hasPending = Object.keys(window._pendingTasks||{}).length > 0;
+  if(!ps.length && !hasPending){el.innerHTML='<div class="empty-state"><div class="icon">📭</div><p>暂无论文</p></div>';return}
+  if(!ps.length){el.innerHTML='';restorePendingCards();return}
+  el.innerHTML=ps.map(p=>{
+    const isProcessing = p.main_framework === 'processing';
+    if (isProcessing) {
+      return '<div class="card card-pending"><h3>'+esc(p.title)+' <span class="badge bg-orange" style="animation:pulse 1.5s ease-in-out infinite">处理中</span></h3>'
+        +'<div class="task-progress"><div class="tp-bar"><div class="tp-fill" style="width:30%;background:linear-gradient(90deg,var(--orange),var(--accent))"></div></div>'
+        +'<div class="tp-info"><span class="tp-stage">后台处理中</span><span class="tp-pct">...</span></div></div>'
+        +'<div class="meta">处理完成后将显示详细信息</div></div>';
+    }
+    const es=window._paperStatuses&&window._paperStatuses[p.paper_id];
+    const tc=(es&&es.total_claims)||0, te=(es&&es.total_evidence)||0, tl=(es&&es.total_limitations)||0;
+    const total=tc+te+tl;
+    const running=es&&es.runs&&es.runs.length>0&&es.runs.some(r=>r.status==='running');
+    const estTotal=Math.max(total, Math.ceil((p.page_count||50)*2));
+    const pct=Math.round(Math.min(100, total/estTotal*100));
+    let badge='<span class="badge bg-dim">...</span>';
+    if(es){
+      if(running) badge='<span class="badge bg-orange">'+tc+'/'+estTotal+' 论点</span>';
+      else if(total>0) badge='<span class="badge bg-green">'+tc+' 论点 '+te+' 证据</span>';
+      else badge='<span class="badge bg-dim">待抽取</span>';
+    }
+    var bar='';
+    if(running||total>0){
+      bar='<div class="ext-progress"><div class="ext-bar" style="width:'+pct+'%;background:'+(running?'var(--orange)':'var(--green)')+'"></div></div>';
+    }
+    return '<div class="card"><h3>'+esc(p.title)+' '+badge+'</h3>'
+      +bar
+      +'<div class="meta">'+(p.year||'?')+' · '+esc(p.main_framework||'')+' · '+(p.page_count||0)+'页</div>'
+      +'<div class="actions">'
+      +'<button class="btn btn-sm" onclick="viewPaperDetail(\''+p.paper_id+'\')">详情</button> '
+      +'<button class="btn btn-sm btn-primary" onclick="viewPaperGraph(\''+(p.graph_id||'')+'\',\''+p.paper_id+'\')">查看图谱</button> '
+      +'<button class="btn btn-sm btn-danger" onclick="deletePaper(\''+p.paper_id+'\')">删除</button>'
+      +'</div></div>';
+  }).join('');
+  restorePendingCards();
 }
 async function viewPaperDetail(pid){
   const p=await fetchJSON(API+'papers/'+pid);
@@ -264,7 +428,14 @@ async function viewPaperDetail(pid){
     <h3 style="margin-top:20px">论点 (${claims.count})</h3>
     ${claims.claims.map(c=>`<div class="card"><div class="meta">${badge(c.claim_type,'blue')} ${badge(c.status,'green')} ${badge(c.importance,'dim')} · 置信度${(c.extraction_confidence*100).toFixed(0)}%</div><div class="text">${esc(c.claim_text)}</div></div>`).join('')||'<p style="color:var(--fg3)">暂无，需要运行抽取</p>'}`;
 }
-async function extractPaper(pid,gid){try{const r=await fetchJSON(API+'papers/'+pid+'/extract?graph_id='+gid,{method:'POST'});toast('抽取完成: '+JSON.stringify(r.stats),true)}catch(e){toast(e.message,false)}}
+async function deletePaper(pid){
+  if(!confirm('确定要删除这篇论文及其所有相关数据吗？此操作不可撤销。'))return;
+  try{
+    const r=await fetch(API+'papers/'+pid,{method:'DELETE'});
+    if(r.ok){toast('删除成功',true);loadPanel('papers')}
+    else{const d=await r.json();toast('删除失败: '+(d.detail||''),false)}
+  }catch(e){toast(e.message,false)}
+}
 function viewPaperGraph(gid,pid){$$('#tabs button').forEach(b=>b.classList.remove('active'));$('#tabs button[data-panel="series-graph"]').classList.add('active');loadPanel('series-graph',{graphId:gid,paperId:pid})}
 
 // ---- Series Graph ----
@@ -300,9 +471,102 @@ async function renderSeriesGraph(m,opts={}){
 async function loadSeriesGraph(){
   const gid=document.getElementById('sg-select')?.value||window._selGraphId;
   window._selGraphId=gid;
-  const data=await fetchJSON(API+'graph-full?graph_id='+encodeURIComponent(gid)+(window._selPaperId?'&paper_id='+window._selPaperId:''));
+  const url=API+'graph-view?graph_id='+encodeURIComponent(gid)+'&mode=paragraph&limit=300'+(window._selPaperId?'&paper_id='+window._selPaperId:'');
+  const data=await fetchJSON(url);
   document.getElementById('graph-legend').style.display='block';
-  renderForceGraph('graph-viz',data);
+  renderParagraphGraph('graph-viz',data);
+}
+
+function renderParagraphGraph(containerId, data){
+  const box=document.getElementById(containerId);
+  box.innerHTML='';
+  const W=box.clientWidth, H=box.clientHeight||650;
+  if(!data.nodes||!data.nodes.length){box.innerHTML='<div class=\"empty-state\"><div class=\"icon\">📭</div><p>该图暂无节点</p></div>';return}
+
+  const svg=d3.select('#'+containerId).append('svg').attr('width',W).attr('height',H);
+  const g=svg.append('g');
+
+  // Separate nodes by type
+  const paragraphs=data.nodes.filter(n=>n.type==='paragraph');
+  const claims=data.nodes.filter(n=>n.type==='claim');
+  const evidence=data.nodes.filter(n=>n.type==='evidence');
+  const limitations=data.nodes.filter(n=>n.type==='limitation');
+  const concepts=data.nodes.filter(n=>n.type==='concept');
+
+  // Layout: paragraphs in a vertical chain
+  const chainX=W*0.15, chainW=W*0.55, paraH=28, paraGap=6;
+  const paraX={};
+  paragraphs.forEach((p,i)=>{
+    const y=30+i*(paraH+paraGap);
+    paraX[p.id]={x:chainX,y:y,w:chainW};
+  });
+
+  // Scale to fit
+  const totalH=paragraphs.length*(paraH+paraGap)+40;
+  const zoom=d3.zoom().scaleExtent([0.3,5]).on('zoom',e=>g.attr('transform',e.transform));
+  svg.call(zoom);
+
+  // Draw section_next edges (main chain)
+  const chainEdges=data.edges.filter(e=>e.type==='section_next'&&paraX[e.source]&&paraX[e.target]);
+  g.selectAll('line.chain').data(chainEdges).join('line')
+    .attr('x1',d=>paraX[d.source].x+paraX[d.source].w).attr('y1',d=>paraX[d.source].y+paraH/2)
+    .attr('x2',d=>paraX[d.target].x+paraX[d.target].w).attr('y2',d=>paraX[d.target].y+paraH/2)
+    .attr('stroke','var(--border)').attr('stroke-width',1).attr('stroke-dasharray','6,3');
+
+  // Draw paragraph nodes
+  g.selectAll('rect.para').data(paragraphs).join('rect')
+    .attr('x',d=>paraX[d.id].x).attr('y',d=>paraX[d.id].y)
+    .attr('width',d=>paraX[d.id].w).attr('height',paraH)
+    .attr('fill','var(--surface)').attr('stroke','var(--border)').attr('rx',5)
+    .attr('opacity',0.9);
+  g.selectAll('text.para').data(paragraphs).join('text')
+    .attr('x',d=>paraX[d.id].x+6).attr('y',d=>paraX[d.id].y+18)
+    .text(d=>(d.label||'P'+(d.page||'')).substring(0,70))
+    .attr('font-size','11px').attr('fill','var(--fg2)').attr('font-family','var(--font)');
+
+  // Attach claims to their paragraph (find via belongs_to edge)
+  const belongsTo=new Map(); // claim_id -> section_id
+  data.edges.forEach(e=>{if(e.type==='belongs_to')belongsTo.set(e.source,e.target)});
+
+  // Position claims near their paragraph
+  const claimYOff={}; // section_id -> next y offset
+  claims.forEach(c=>{
+    const secId=belongsTo.get(c.id);
+    if(!secId||!paraX[secId])return;
+    const py=paraX[secId].y;
+    const off=claimYOff[secId]||0;
+    c._x=paraX[secId].x+paraX[secId].w+12;
+    c._y=py-off*20;
+    claimYOff[secId]=off+1;
+  });
+
+  const visibleClaims=claims.filter(c=>c._x!==undefined);
+  g.selectAll('circle.claim').data(visibleClaims).join('circle')
+    .attr('cx',d=>d._x).attr('cy',d=>d._y).attr('r',5)
+    .attr('fill','var(--accent)').attr('fill-opacity',0.8);
+  g.selectAll('line.claim-link').data(visibleClaims).join('line')
+    .attr('x1',d=>paraX[belongsTo.get(d.id)].x+paraX[belongsTo.get(d.id)].w)
+    .attr('y1',d=>paraX[belongsTo.get(d.id)].y+paraH/2)
+    .attr('x2',d=>d._x).attr('y2',d=>d._y)
+    .attr('stroke','var(--accent)').attr('stroke-width',0.5).attr('stroke-opacity',0.3);
+
+  g.selectAll('text.claim-label').data(visibleClaims.slice(0,50)).join('text')
+    .attr('x',d=>d._x+8).attr('y',d=>d._y+3)
+    .text(d=>(d.label||'').substring(0,35))
+    .attr('font-size','9px').attr('fill','var(--fg2)').attr('font-family','var(--font)');
+
+  // Tooltip
+  const tip=d3.select('#'+containerId).append('div').attr('class','graph-tooltip');
+  g.selectAll('circle.claim,rect.para').on('mouseover',(e,d)=>{
+    tip.style('display','block').html('<strong>'+esc(d.type)+'</strong><br>'+esc((d.label||d.text||'').substring(0,150)));
+  }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
+   .on('mouseout',()=>tip.style('display','none'));
+
+  // Stats note
+  if(data.stats&&data.stats.has_more){
+    svg.append('text').text('显示 '+data.stats.returned_nodes+'/'+data.stats.total_nodes+' 节点（已裁剪）')
+      .attr('x',12).attr('y',H-12).attr('font-size','11px').attr('fill','var(--fg3)');
+  }
 }
 
 // ---- Bridge Graph ----
@@ -377,10 +641,14 @@ function renderForceGraph(containerId,data,mode='series'){
   }
 
   if(mode==='series'){
-    (data.claims||[]).forEach(c=>addNode(c.claim_id,c.claim_text?.substring(0,60)||c.claim_id,'claim',{fullText:c.claim_text,conf:c.extraction_confidence,ctype:c.claim_type}));
-    (data.evidence||[]).forEach(e=>addNode(e.evidence_id,e.evidence_text?.substring(0,60)||e.evidence_id,'evidence',{fullText:e.evidence_text,strength:e.strength}));
-    (data.limitations||[]).forEach(l=>addNode(l.limitation_id,l.limitation_text?.substring(0,60)||l.limitation_id,'limitation',{fullText:l.limitation_text,severity:l.severity}));
+    // Limit nodes to prevent browser freeze (top 200 by confidence, plus all concepts/limitations)
+    const MAX_CLAIMS=150, MAX_EVIDENCE=30, MAX_LIMITATIONS=20;
+    const topClaims=(data.claims||[]).sort((a,b)=>(b.extraction_confidence||0)-(a.extraction_confidence||0)).slice(0,MAX_CLAIMS);
+    topClaims.forEach(c=>addNode(c.claim_id,c.claim_text?.substring(0,50)||c.claim_id,'claim',{fullText:c.claim_text,conf:c.extraction_confidence,ctype:c.claim_type}));
+    (data.evidence||[]).slice(0,MAX_EVIDENCE).forEach(e=>addNode(e.evidence_id,e.evidence_text?.substring(0,50)||e.evidence_id,'evidence',{fullText:e.evidence_text,strength:e.strength}));
+    (data.limitations||[]).slice(0,MAX_LIMITATIONS).forEach(l=>addNode(l.limitation_id,l.limitation_text?.substring(0,50)||l.limitation_id,'limitation',{fullText:l.limitation_text,severity:l.severity}));
     (data.concepts||[]).forEach(c=>addNode(c.concept_key,c.label_zh||c.concept_key,'concept',{fullText:c.definition,namespace:c.namespace}));
+    window._graphNote=topClaims.length<(data.claims||[]).length?`显示 ${topClaims.length}/${data.claims.length} 条论点（按置信度排序）`:'';
   }
 
   const edges=[];
@@ -420,6 +688,7 @@ function renderForceGraph(containerId,data,mode='series'){
   });
   // Connect adjacent claims in document order
   for(let i=0;i<sortedClaims.length-1;i++){
+    if(!nodeMap.has(sortedClaims[i].claim_id)||!nodeMap.has(sortedClaims[i+1].claim_id))continue;
     const sameSection=sortedClaims[i].section_id===sortedClaims[i+1].section_id;
     edges.push({
       source:sortedClaims[i].claim_id,target:sortedClaims[i+1].claim_id,
@@ -518,20 +787,32 @@ function renderForceGraph(containerId,data,mode='series'){
   }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
     .on('mouseout',()=>tip.style('display','none'));
 
-  // Force simulation
+  // Force simulation — stop after 300 ticks to avoid browser freeze
+  let tickCount=0;
   const sim=d3.forceSimulation(nodes)
-    .force('link',d3.forceLink(edges).id(d=>d.id).distance(d=>60+(1-(d.importance||0.5))*60))
-    .force('charge',d3.forceManyBody().strength(-200))
+    .force('link',d3.forceLink(edges).id(d=>d.id).distance(d=>50+(1-(d.importance||0.5))*40))
+    .force('charge',d3.forceManyBody().strength(-120))
     .force('center',d3.forceCenter(W/2,H/2))
-    .force('collision',d3.forceCollide().radius(d=>d.r+8))
+    .force('collision',d3.forceCollide().radius(d=>d.r+6))
+    .alphaDecay(0.02)  // Faster cooling
     .on('tick',()=>{
+      tickCount++;
       link.attr('x1',d=>d.source.x).attr('y1',d=>d.source.y)
         .attr('x2',d=>d.target.x).attr('y2',d=>d.target.y);
       node.attr('transform',d=>`translate(${d.x},${d.y})`);
+      if(tickCount>300) sim.stop();
     });
 
+  // Show graph note
+  if(window._graphNote){
+    const note=svg.append('text').text(window._graphNote)
+      .attr('x',12).attr('y',H-12)
+      .attr('font-size','11px').attr('fill','var(--fg3)')
+      .attr('font-family','var(--font)');
+    window._graphNote='';
+  }
+
   // Save zoom state
-  svg.on('wheel.zoom',null); // Let d3 handle it
   const origEnd=zoom.on('end');
   zoom.on('end',e=>{_zoomTransform=e.transform});
 }

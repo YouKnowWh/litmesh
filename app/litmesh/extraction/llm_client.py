@@ -29,20 +29,27 @@ class LLMClient:
         base_url: str = "",
         api_key: str = "",
     ):
-        provider = provider or os.getenv("LITMESH_LLM_PROVIDER", "anthropic")
+        def _getenv(*keys: str) -> str:
+            for k in keys:
+                v = os.getenv(k, "").strip()
+                if v:
+                    return v
+            return ""
+
+        provider = provider or _getenv("LITMESH_LLM_PROVIDER") or "openai_compatible"
 
         if provider == "anthropic":
-            self.model = model or os.getenv("ANTHROPIC_MODEL", "deepseek-v4-pro[1m]")
-            self.base_url = base_url or os.getenv("ANTHROPIC_BASE_URL", "https://api.deepseek.com/anthropic")
-            self.api_key = api_key or os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+            self.model = model or _getenv("ANTHROPIC_MODEL") or "claude-3-5-sonnet-latest"
+            self.base_url = base_url or _getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+            self.api_key = api_key or _getenv("ANTHROPIC_AUTH_TOKEN")
         elif provider in ("openai_compatible", "openai"):
-            self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
-            self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-            self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+            self.model = model or _getenv("OPENAI_MODEL") or "deepseek-chat"
+            self.base_url = base_url or _getenv("OPENAI_BASE_URL") or "https://api.deepseek.com/v1"
+            self.api_key = api_key or _getenv("OPENAI_API_KEY", "DEEPSEEK_API_KEY")
         elif provider == "gemini":
-            self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            self.base_url = base_url or os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
-            self.api_key = api_key or os.getenv("GEMINI_API_KEY", "")
+            self.model = model or _getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+            self.base_url = base_url or _getenv("GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta"
+            self.api_key = api_key or _getenv("GEMINI_API_KEY")
         else:
             self.model = model
             self.base_url = base_url
@@ -64,11 +71,14 @@ class LLMClient:
         prompt: str,
         system: str = "You are a precise academic text analyst.",
         temperature: float = 0.1,
+        max_tokens: int = 4096,
     ) -> str:
-        return self._provider.complete(prompt, system, temperature)
+        return self._provider.complete(prompt, system, temperature, max_tokens)
 
-    def complete_json(self, prompt: str, system: Optional[str] = None) -> dict:
-        text = self.complete(prompt, system=system or "You output only valid JSON.")
+    def complete_json(self, prompt: str, system: Optional[str] = None,
+                       temperature: float = 0.1, max_tokens: int = 4096) -> dict:
+        text = self.complete(prompt, system=system or "You output only valid JSON.",
+                            temperature=temperature, max_tokens=max_tokens)
         return self._parse_json(text)
 
     @staticmethod

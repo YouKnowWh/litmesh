@@ -85,6 +85,10 @@ CREATE TABLE IF NOT EXISTS section_blocks (
     global_order_index INTEGER NOT NULL DEFAULT 0,
     raw_text TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL DEFAULT '',
+    keyword_summary TEXT NOT NULL DEFAULT '',
+    block_role TEXT NOT NULL DEFAULT 'content',
+    structure_title TEXT NOT NULL DEFAULT '',
+    group_id TEXT,
     page_start INTEGER,
     page_end INTEGER,
     toc_anchor_id TEXT,
@@ -556,3 +560,36 @@ CREATE TABLE IF NOT EXISTS outline_nodes (
 
 CREATE INDEX IF NOT EXISTS idx_outline_paper ON outline_nodes(paper_id);
 CREATE INDEX IF NOT EXISTS idx_outline_parent ON outline_nodes(parent_outline_id);
+
+-- ---- Structure Groups (v1) ----
+
+CREATE TABLE IF NOT EXISTS structure_groups (
+    group_id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'context',
+    structure_title TEXT NOT NULL DEFAULT '',
+    display_title TEXT NOT NULL DEFAULT '',
+    keyword_summary TEXT NOT NULL DEFAULT '',
+    heading_path_json TEXT NOT NULL DEFAULT '[]',
+    parent_group_id TEXT,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (paper_id) REFERENCES paper_cards(paper_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id TEXT NOT NULL,
+    section_id TEXT NOT NULL,
+    member_order INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, section_id),
+    FOREIGN KEY (group_id) REFERENCES structure_groups(group_id),
+    FOREIGN KEY (section_id) REFERENCES section_blocks(section_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_groups_paper ON structure_groups(paper_id);
+CREATE INDEX IF NOT EXISTS idx_groups_parent ON structure_groups(parent_group_id);
+CREATE INDEX IF NOT EXISTS idx_members_group ON group_members(group_id);

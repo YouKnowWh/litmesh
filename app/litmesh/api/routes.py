@@ -609,7 +609,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                     paper_filter = "AND paper_id = ?"
                     paper_params = [graph_id, paper_id]
 
-            # TOC-driven three-layer graph: chapter → paragraph → argument
+            # TOC-driven three-layer graph: chapter → context → paragraph → argument
             # Chapters come from outline_nodes table (persistent TOC tree)
             toc_rows = db.conn.execute(
                 "SELECT * FROM outline_nodes WHERE paper_id = ? ORDER BY order_index",
@@ -619,11 +619,20 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
             # If we have TOC data, use it as structural source of truth
             if toc_rows:
                 chapters = []
-                toc_map = {}  # outline_id -> chapter node
+                contexts = []
+                toc_map = {}  # outline_id -> {chapter_id, context_id, title, level}
+                current_chapter_id = None
                 for tr in toc_rows:
+                    tr = dict(tr)
                     if tr["level"] == 1:
                         ch_id = f"toc_{tr['outline_id']}"
-                        toc_map[tr["outline_id"]] = ch_id
+                        current_chapter_id = ch_id
+                        toc_map[tr["outline_id"]] = {
+                            "chapter_id": ch_id,
+                            "context_id": None,
+                            "title": tr["title"],
+                            "level": tr["level"],
+                        }
                         chapters.append({
                             "id": ch_id, "type": "chapter",
                             "label": tr["title"][:60],
@@ -633,19 +642,32 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                             "confidence": tr["confidence"],
                         })
                     elif tr["level"] >= 2:
-                        # Sub-section: map to parent chapter
-                        parent_ch = toc_map.get(tr["parent_outline_id"])
-                        ch_id = f"toc_{tr['outline_id']}"
-                        if parent_ch:
-                            toc_map[tr["outline_id"]] = parent_ch
+                        parent_info = toc_map.get(tr["parent_outline_id"]) if tr.get("parent_outline_id") else None
+                        parent_ch = parent_info["chapter_id"] if parent_info else current_chapter_id
+                        ctx_id = f"ctx_{tr['outline_id']}"
+                        toc_map[tr["outline_id"]] = {
+                            "chapter_id": parent_ch,
+                            "context_id": ctx_id,
+                            "title": tr["title"],
+                            "level": tr["level"],
+                        }
+                        contexts.append({
+                            "id": ctx_id, "type": "context",
+                            "label": tr["title"][:70],
+                            "chapter_id": parent_ch,
+                            "order": tr["order_index"],
+                            "page": tr["body_page"] or tr["toc_page"] or 0,
+                            "confidence": tr["confidence"],
+                        })
 
-                nodes = chapters + nodes
+                nodes = chapters + contexts + nodes
 
                 # Section blocks with toc_anchor_id binding
                 p_rows = db.conn.execute(
                     f"SELECT section_id, heading, heading_path, display_title, "
                     f"raw_text, page_start, page_end, toc_anchor_id, toc_anchor_title, "
-                    f"chapter_index, section_index, block_index, global_order_index "
+                    f"chapter_index, section_index, block_index, global_order_index, "
+                    f"block_role, structure_title "
                     f"FROM section_blocks WHERE graph_id = ? {paper_filter} "
                     f"ORDER BY global_order_index, page_start, section_id LIMIT ?",
                     (*paper_params, limit)
@@ -655,29 +677,91 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                 ).fetchone()[0]
 
                 p_ids = set()
+                intro_context_by_chapter = {}
+                context_by_title = {}
+                derived_context_by_key = {}
+                for c in contexts:
+                    context_by_title[(c.get("chapter_id"), c.get("label"))] = c["id"]
+
+                def ensure_intro_context(chapter_id: str, label: str = "章节导读") -> str:
+                    if chapter_id in intro_context_by_chapter:
+                        return intro_context_by_chapter[chapter_id]
+                    ctx_id = f"ctx_intro_{chapter_id}"
+                    intro_context_by_chapter[chapter_id] = ctx_id
+                    nodes.append({
+                        "id": ctx_id, "type": "context",
+                        "label": label,
+                        "chapter_id": chapter_id,
+                        "order": -1,
+                        "page": 0,
+                        "synthetic": True,
+                    })
+                    return ctx_id
+
+                def ensure_derived_context(chapter_id: str, label: str, page: int, order_idx: int) -> str:
+                    key = (chapter_id, label.strip())
+                    if key in derived_context_by_key:
+                        return derived_context_by_key[key]
+                    ctx_id = f"ctx_auto_{abs(hash((chapter_id, label))) % 10**12:012d}"
+                    derived_context_by_key[key] = ctx_id
+                    nodes.append({
+                        "id": ctx_id, "type": "context",
+                        "label": label[:70],
+                        "chapter_id": chapter_id,
+                        "order": order_idx,
+                        "page": page or 0,
+                        "synthetic": True,
+                        "strong_context": True,
+                    })
+                    return ctx_id
+
                 for r in p_rows:
                     r = dict(r)
                     p_ids.add(r["section_id"])
-                    if (r.get("chapter_index") or 0) <= 0 and not r.get("toc_anchor_id"):
-                        chapter_id = None
-                    else:
-                        chapter_id = None
+                    chapter_id = None
+                    context_id = None
                     anchor = r.get("toc_anchor_id") or ""
                     if anchor:
-                        chapter_id = toc_map.get(anchor)
+                        info = toc_map.get(anchor)
+                        if info:
+                            chapter_id = info.get("chapter_id")
+                            context_id = info.get("context_id")
                     # Fallback: if no anchor, try to match by heading_path
                     if not chapter_id and (r.get("chapter_index") or 0) > 0:
                         hp = _parse_heading_path(r.get("heading_path"))
                         if hp:
                             for tr in toc_rows:
+                                tr = dict(tr)
                                 if tr["title"] == hp[0] and tr["level"] == 1:
-                                    chapter_id = toc_map.get(tr["outline_id"])
+                                    info = toc_map.get(tr["outline_id"])
+                                    chapter_id = info.get("chapter_id") if info else None
                                     break
+                            if len(hp) > 1 and chapter_id:
+                                context_id = context_by_title.get((chapter_id, hp[-1]))
                     # Last fallback: use page proximity
                     if not chapter_id and chapters and (r.get("chapter_index") or 0) > 0:
                         page = r.get("page_start") or 0
                         nearest = min(chapters, key=lambda c: abs((c.get("page") or 0) - page))
                         chapter_id = nearest["id"]
+                    if chapter_id and not context_id:
+                        hp = _parse_heading_path(r.get("heading_path"))
+                        local_label = ""
+                        if len(hp) > 1:
+                            local_label = hp[-1]
+                        elif r.get("structure_title") and (not hp or r.get("structure_title") != hp[0]):
+                            local_label = r.get("structure_title") or ""
+                        elif r.get("section_index") and r.get("heading"):
+                            local_label = r.get("heading") or ""
+                        local_label = (local_label or "").strip()
+                        if local_label and local_label != (hp[0] if hp else "") and len(local_label) <= 40:
+                            context_id = ensure_derived_context(
+                                chapter_id,
+                                local_label,
+                                r.get("page_start") or 0,
+                                r.get("global_order_index") or 0,
+                            )
+                        else:
+                            context_id = ensure_intro_context(chapter_id)
 
                     nodes.append({
                         "id": r["section_id"], "type": "paragraph",
@@ -685,7 +769,9 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                         "fullText": (r["raw_text"] or ""),
                         "page": r["page_start"] or 0,
                         "chapter_id": chapter_id,
+                        "context_id": context_id,
                         "chapter_index": r["chapter_index"],
+                        "section_index": r.get("section_index"),
                         "global_order_index": r["global_order_index"],
                     })
             else:
@@ -694,7 +780,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                     f"SELECT section_id, heading, heading_path, heading_level, display_title, "
                     f"raw_text, page_start, page_end, paper_id, "
                     f"chapter_index, section_index, block_index, global_order_index, "
-                    f"toc_anchor_id, toc_anchor_title "
+                    f"toc_anchor_id, toc_anchor_title, block_role, structure_title "
                     f"FROM section_blocks WHERE graph_id = ? {paper_filter} "
                     f"ORDER BY global_order_index, page_start, section_id LIMIT ?",
                     (*paper_params, limit)
@@ -704,9 +790,29 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                 ).fetchone()[0]
 
                 chapters = []
+                contexts = []
                 p_ids = set()
                 current_chapter_id = None
                 chapter_order = 0
+                current_context_id = None
+                derived_context_by_key = {}
+
+                def ensure_fallback_context(chapter_id: str, label: str, page: int, order_idx: int) -> str:
+                    key = (chapter_id, label.strip())
+                    if key in derived_context_by_key:
+                        return derived_context_by_key[key]
+                    ctx_id = f"ctx_auto_{abs(hash((chapter_id, label))) % 10**12:012d}"
+                    derived_context_by_key[key] = ctx_id
+                    contexts.append({
+                        "id": ctx_id, "type": "context",
+                        "label": label[:70],
+                        "chapter_id": chapter_id,
+                        "order": order_idx,
+                        "page": page or 0,
+                        "synthetic": True,
+                        "strong_context": True,
+                    })
+                    return ctx_id
                 for i, r in enumerate(p_rows):
                     r = dict(r)
                     p_ids.add(r["section_id"])
@@ -717,6 +823,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                             "fullText": (r["raw_text"] or ""),
                             "page": r["page_start"] or 0,
                             "chapter_id": None,
+                            "context_id": None,
                             "chapter_index": r["chapter_index"],
                             "global_order_index": r["global_order_index"],
                         })
@@ -739,47 +846,84 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                             "page": r["page_start"] or 0,
                         })
                         current_chapter_id = ch_id
+                        current_context_id = f"ctx_intro_{ch_id}"
+                        contexts.append({
+                            "id": current_context_id, "type": "context",
+                            "label": "章节导读",
+                            "chapter_id": current_chapter_id,
+                            "order": -1,
+                            "page": r["page_start"] or 0,
+                            "synthetic": True,
+                        })
+                    elif heading_path and len(heading_path) > 1:
+                        ctx_label = heading_path[-1]
+                        current_context_id = ensure_fallback_context(
+                            current_chapter_id,
+                            ctx_label,
+                            r["page_start"] or 0,
+                            r["global_order_index"] or i,
+                        )
                     nodes.append({
                         "id": r["section_id"], "type": "paragraph",
                         "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:60],
                         "fullText": (r["raw_text"] or ""),
                         "page": r["page_start"] or 0,
                         "chapter_id": current_chapter_id,
+                        "context_id": current_context_id,
                         "chapter_index": r["chapter_index"],
                         "global_order_index": r["global_order_index"],
                     })
-                nodes = chapters + nodes
+                nodes = chapters + contexts + nodes
 
             # Front matter grouping (shared across both paths):
-            # collect paragraphs without a chapter into a synthetic "前置材料" node
+            # collect paragraphs without a chapter into a synthetic "前置材料" chapter + context
             orphaned = [n for n in nodes if n.get("type") == "paragraph" and not n.get("chapter_id")]
             if orphaned:
                 fm_id = "fm_front_matter"
-                chapters_sorted = [n for n in nodes if n.get("type") == "chapter"]
+                fm_ctx_id = "ctx_front_matter"
                 nodes = [{
                     "id": fm_id, "type": "chapter",
                     "label": "前置材料", "order": 0, "page": 0,
                     "front_matter": True,
+                }, {
+                    "id": fm_ctx_id, "type": "context",
+                    "label": "封面 / 目录 / 前言", "chapter_id": fm_id,
+                    "order": 0, "page": 0, "front_matter": True,
                 }] + nodes
                 for n in orphaned:
                     n["chapter_id"] = fm_id
+                    n["context_id"] = fm_ctx_id
 
-            # Edges: chapter_contains
+            # Edges: chapter_contains_context
+            seen_context_edges = set()
             for n in nodes:
-                if n["type"] == "paragraph" and n.get("chapter_id"):
+                if n["type"] == "context" and n.get("chapter_id"):
+                    edge_key = (n["chapter_id"], n["id"])
+                    if edge_key in seen_context_edges:
+                        continue
+                    seen_context_edges.add(edge_key)
                     edges.append({
                         "source": n["chapter_id"], "target": n["id"],
                         "type": "chapter_contains", "confidence": 1.0,
                     })
 
-            # section_next edges (within same chapter only)
+            # Edges: context_contains_paragraph
+            for n in nodes:
+                if n["type"] == "paragraph" and n.get("context_id"):
+                    edges.append({
+                        "source": n["context_id"], "target": n["id"],
+                        "type": "context_contains", "confidence": 1.0,
+                    })
+
+            # section_next edges (same chapter, distinguish same-context continuity)
             para_nodes = [n for n in nodes if n["type"] == "paragraph"]
             for i in range(len(para_nodes) - 1):
                 a, b = para_nodes[i], para_nodes[i + 1]
                 if a.get("chapter_id") == b.get("chapter_id"):
                     edges.append({
                         "source": a["id"], "target": b["id"],
-                        "type": "section_next", "confidence": 0.8,
+                        "type": "context_next" if a.get("context_id") == b.get("context_id") else "section_next",
+                        "confidence": 0.8,
                     })
 
             # Attach claims/evidence/limitations
@@ -831,14 +975,17 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                         "type": "belongs_to", "confidence": 0.7,
                     })
 
-            # Cross-node relations filtered to visible args
-            arg_ids = {n["id"] for n in nodes if n["type"] in ("claim", "evidence", "limitation")}
+            # Cross-node relations filtered to visible nodes, excluding structural edges
+            node_ids = {n["id"] for n in nodes}
+            built_in_edge_types = {"chapter_contains", "context_contains", "section_next", "context_next", "belongs_to"}
             for rel in db.conn.execute(
                 f"SELECT source_id, target_id, relation_type, confidence "
                 f"FROM graph_relations WHERE graph_id = ? LIMIT {limit * 2}",
                 (graph_id,)
             ).fetchall():
-                if rel["source_id"] in arg_ids and rel["target_id"] in arg_ids:
+                if rel["relation_type"] in built_in_edge_types:
+                    continue
+                if rel["source_id"] in node_ids and rel["target_id"] in node_ids:
                     edges.append({
                         "source": rel["source_id"], "target": rel["target_id"],
                         "type": rel["relation_type"], "confidence": rel["confidence"],

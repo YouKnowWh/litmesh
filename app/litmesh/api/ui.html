@@ -478,13 +478,17 @@ async function renderSeriesGraph(m,opts={}){
       </div>
     </div>
     <div class="graph-legend" id="graph-legend" style="display:none">
+      <div class="item"><span class="dot" style="background:var(--accent2)"></span> 章节 Chapter</div>
+      <div class="item"><span class="dot" style="background:var(--purple)"></span> 上下文组 Context</div>
+      <div class="item"><span class="dot" style="background:var(--fg2)"></span> 文段 Paragraph</div>
       <div class="item"><span class="dot" style="background:var(--accent)"></span> 论点 Claim</div>
       <div class="item"><span class="dot" style="background:var(--accent2)"></span> 证据 Evidence</div>
       <div class="item"><span class="dot" style="background:var(--red)"></span> 局限 Limitation</div>
-      <div class="item"><span class="dot" style="background:var(--purple)"></span> 概念 Concept</div>
       <div style="margin-top:4px;font-size:10px;color:var(--fg3)">
-        <div style="color:var(--accent2)">⇢⇢ 同章上下文</div>
-        <div style="color:var(--fg3);font-style:italic">⇢ 跨章上下文</div>
+        <div style="color:var(--accent2)">── 章节包含上下文组</div>
+        <div style="color:var(--purple)">── 上下文组包含文段</div>
+        <div style="color:var(--accent2)">── 强上下文连续</div>
+        <div style="color:var(--fg3);font-style:italic">- - 章内跨组连续</div>
         <div style="color:var(--green)">── 支持 supports</div>
         <div style="color:var(--red)">── 约束 constrains</div>
         <div style="color:var(--orange)">── 矛盾 contradicts</div>
@@ -498,7 +502,8 @@ async function loadSeriesGraph(mode){
   const gid=document.getElementById('sg-select')?.value||window._selGraphId;
   window._selGraphId=gid;
   const viewMode=mode||'chapter_context';
-  const url=API+'graph-view?graph_id='+encodeURIComponent(gid)+'&mode='+viewMode+'&limit=300'+(window._selPaperId?'&paper_id='+window._selPaperId:'');
+  const graphLimit=viewMode==='chapter_context'?1200:300;
+  const url=API+'graph-view?graph_id='+encodeURIComponent(gid)+'&mode='+viewMode+'&limit='+graphLimit+(window._selPaperId?'&paper_id='+window._selPaperId:'');
   const data=await fetchJSON(url);
   data._mode=viewMode;
   document.getElementById('graph-legend').style.display='block';
@@ -509,7 +514,7 @@ async function loadSeriesGraph(mode){
 function renderChapterContextGraph(containerId, data){
   const box=document.getElementById(containerId);
   box.innerHTML='';
-  const W=box.clientWidth, H=Math.max(box.clientHeight||650, 650);
+  const W=box.clientWidth, H=Math.max(box.clientHeight||700, 700);
   if(!data.nodes||!data.nodes.length){box.innerHTML='<div class=\"empty-state\"><div class=\"icon\">📭</div><p>该图暂无节点</p></div>';return}
 
   const svg=d3.select('#'+containerId).append('svg').attr('width',W).attr('height',H)
@@ -533,89 +538,165 @@ function renderChapterContextGraph(containerId, data){
   const nodes=data.nodes, edges=data.edges||[];
   const nodeMap={}; nodes.forEach(n=>nodeMap[n.id]=n);
 
-  // Layout constants
-  const CH_X=40, CH_R=12, CH_GAP=140;  // chapter column
-  const PARA_X=CH_X+CH_R+60, PARA_W=140, PARA_H=22, PARA_GAP=8;
-  const ARG_X_OFFSET=PARA_W+16, ARG_R=5;
-
-  // Separate nodes by type
   const chapters=nodes.filter(n=>n.type==='chapter').sort((a,b)=>(a.order||0)-(b.order||0));
+  const contexts=nodes.filter(n=>n.type==='context').sort((a,b)=>(a.order||0)-(b.order||0));
   const paragraphs=nodes.filter(n=>n.type==='paragraph');
   const args=nodes.filter(n=>n.type==='claim'||n.type==='evidence'||n.type==='limitation');
 
-  // Position chapters vertically
-  const chY={};
+  const contextsByChapter={}; contexts.forEach(c=>{const k=c.chapter_id||'_orphan';(contextsByChapter[k]||(contextsByChapter[k]=[])).push(c)});
+  const parasByContext={}; paragraphs.forEach(p=>{const k=p.context_id||'_orphan';(parasByContext[k]||(parasByContext[k]=[])).push(p)});
+  Object.values(parasByContext).forEach(a=>a.sort((x,y)=>(x.global_order_index||0)-(y.global_order_index||0)));
+
+  function polar(cx, cy, r, a){ return {x: cx + r*Math.cos(a), y: cy + r*Math.sin(a)}; }
+  function cleanLabel(text){
+    return (text||'')
+      .replace(/\s+/g,' ')
+      .replace(/^第\s*\d+\s*[章节篇部分卷]\s*/i,'')
+      .replace(/^(chapter|section|part)\s*[\dIVXivx.\-]+\s*/i,'')
+      .replace(/^封面\s*\/\s*目录\s*\/\s*前言$/,'前置材料')
+      .trim();
+  }
+  function keywordLabel(node){
+    const raw=(node.keyword_summary||node.display_title||node.label||node.heading||'').trim();
+    if(!raw)return node.type==='paragraph'?'文段':node.type==='context'?'上下文':'章节';
+    const afterBar=raw.includes('｜') ? raw.split('｜').pop() : raw;
+    const base=cleanLabel(afterBar);
+    const bits=base.split(/[，。,；：:、\-—/（）()【】\[\]\s]+/).map(s=>s.trim()).filter(Boolean);
+    const stop=new Set(['第','章','节','篇','部分','文段','上下文','内容','材料','目录','前言','讨论','问题探讨','本节聚焦','相关信息','章节导读']);
+    const picked=[];
+    for(const bit of bits){
+      if(stop.has(bit)) continue;
+      if(bit.length<2) continue;
+      picked.push(bit);
+      if(picked.length>=2) break;
+    }
+    if(picked.length) return trunc(picked.join(' · '), 18);
+    return trunc(base, 18);
+  }
+
+  const S=Math.max(W, H, 1280);
+  const totalH=Math.max(H, S);
+  svg.attr('height',totalH).attr('viewBox',[0,0,S,S]);
+
+  const CX=S/2, CY=S/2;
+  const CH_R=18, CTX_W=96, CTX_H=20, PARA_R=3.2, ARG_R=4;
+  const chapterRing=Math.max(120, S*0.16);
+  const contextRing=Math.max(230, S*0.28);
+  const paraRingBase=Math.max(350, S*0.39);
+  const paraBandGap=34;
+  const argRingBase=paraRingBase+paraBandGap*2+38;
+  const guideRings=[chapterRing, contextRing, paraRingBase-20, paraRingBase+paraBandGap+6, argRingBase];
+
+  const paraPos={};
+  const contextPos={};
+
   chapters.forEach((ch,i)=>{
-    ch._x=CH_X; ch._y=60+i*CH_GAP;
-    chY[ch.id]=ch._y;
+    const angle=(2*Math.PI*i/Math.max(1,chapters.length)) - Math.PI/2;
+    const cp=polar(CX, CY, chapterRing, angle);
+    ch._x=cp.x; ch._y=cp.y; ch._angle=angle;
   });
 
-  // Position paragraphs within their chapter
-  const paraPos={}, chParaCount={};
-  paragraphs.forEach(p=>{
-    const cid=p.chapter_id||'';
-    if(!chParaCount[cid])chParaCount[cid]=0;
-    const idx=chParaCount[cid]++;
-    const baseY=(chY[cid]||60)-30;
-    p._x=PARA_X; p._y=baseY+idx*(PARA_H+PARA_GAP);
-    paraPos[p.id]={x:p._x,y:p._y};
+  chapters.forEach(ch=>{
+    const localContexts=(contextsByChapter[ch.id]||[]);
+    const spread=Math.min(0.8, Math.max(0.16, localContexts.length*0.1));
+    localContexts.forEach((ctx,ci)=>{
+      const angle=localContexts.length===1 ? ch._angle : ch._angle-spread/2 + spread*(ci/(localContexts.length-1));
+      const cp=polar(CX, CY, contextRing, angle);
+      ctx._cx=cp.x; ctx._cy=cp.y; ctx._x=cp.x-CTX_W/2; ctx._y=cp.y-CTX_H/2; ctx._angle=angle;
+      contextPos[ctx.id]=ctx;
+
+      const localParas=(parasByContext[ctx.id]||[]);
+      const perBand=Math.max(10, Math.min(20, Math.ceil(localParas.length/3)||10));
+      localParas.forEach((p,pi)=>{
+        const band=Math.floor(pi/perBand);
+        const slot=pi%perBand;
+        const bandCount=Math.min(perBand, localParas.length-band*perBand);
+        const bandRadius=paraRingBase + band*paraBandGap;
+        const bandSpread=Math.min(0.95, Math.max(0.18, bandCount*0.045));
+        const angle=bandCount===1 ? ctx._angle : ctx._angle-bandSpread/2 + bandSpread*(slot/(bandCount-1));
+        const pp=polar(CX, CY, bandRadius, angle);
+        p._cx=pp.x; p._cy=pp.y; p._angle=angle;
+        paraPos[p.id]={x:p._cx,y:p._cy};
+      });
+    });
   });
 
-  // Position arguments near their paragraph
   const argBySection={};
-  edges.forEach(e=>{if(e.type==='belongs_to'){if(!argBySection[e.source])argBySection[e.source]=[];argBySection[e.source].push(e.target);}});
+  edges.forEach(e=>{ if(e.type==='belongs_to'){ if(!argBySection[e.source])argBySection[e.source]=[]; argBySection[e.source].push(e.target); }});
   args.forEach(a=>{
-    // Find which section this belongs to via belongs_to edge
     const be=edges.find(e=>e.target===a.id&&e.type==='belongs_to');
-    const secId=be?be.source:null;
-    const pp=secId?paraPos[secId]:null;
-    const off=secId?(argBySection[secId]?.indexOf(a.id)||0):0;
-    a._x=pp?pp.x+ARG_X_OFFSET:PARA_X+ARG_X_OFFSET;
-    a._y=pp?pp.y+off*14:60;
+    const pp=(be&&be.source)?paraPos[be.source]:null;
+    if(pp){
+      const src=nodeMap[be.source];
+      const baseA=src&&src._angle!==undefined ? src._angle : 0;
+      const idx=(argBySection[be.source]?.indexOf(a.id)||0);
+      const ap=polar(CX, CY, argRingBase + idx*10, baseA);
+      a._x=ap.x; a._y=ap.y;
+    }else{
+      a._x=CX; a._y=CY;
+    }
   });
 
-  // Extend SVG height
-  const maxY=Math.max(...paragraphs.map(p=>p._y||0),60+chapters.length*CH_GAP)+60;
-  svg.attr('height',Math.max(H,maxY)).attr('viewBox',[0,0,W,Math.max(H,maxY)]);
-
-  // Color by type
   function typeColor(t){
     if(t==='chapter')return'var(--accent2)';
+    if(t==='context')return'var(--purple)';
     if(t==='claim')return'var(--accent)';
     if(t==='evidence')return'var(--green)';
     if(t==='limitation')return'var(--red)';
     return'var(--fg2)';
   }
 
-  // Draw edges first (behind nodes)
-  // chapter_contains
+  guideRings.forEach((r,i)=>{
+    g.append('circle')
+      .attr('cx',CX).attr('cy',CY).attr('r',r)
+      .attr('fill','none')
+      .attr('stroke','var(--border)')
+      .attr('stroke-width',i===1?0.8:0.6)
+      .attr('stroke-opacity',0.16)
+      .attr('stroke-dasharray',i<2?'':'5,6');
+  });
+
   edges.filter(e=>e.type==='chapter_contains').forEach(e=>{
     const src=nodeMap[e.source], tgt=nodeMap[e.target];
-    if(!src||!tgt||tgt._x===undefined)return;
+    if(!src||!tgt||tgt._cx===undefined)return;
     g.append('line')
-      .attr('x1',src._x+CH_R).attr('y1',src._y)
-      .attr('x2',tgt._x).attr('y2',tgt._y+PARA_H/2)
-      .attr('stroke','var(--accent2)').attr('stroke-width',2).attr('stroke-opacity',0.4);
+      .attr('x1',src._x).attr('y1',src._y)
+      .attr('x2',tgt._cx).attr('y2',tgt._cy)
+      .attr('stroke',src.front_matter?'var(--fg3)':'var(--accent2)')
+      .attr('stroke-width',1.1)
+      .attr('stroke-opacity',src.front_matter?0.1:0.22);
   });
-  // section_next
-  edges.filter(e=>e.type==='section_next').forEach(e=>{
+  edges.filter(e=>e.type==='context_contains').forEach(e=>{
     const src=nodeMap[e.source], tgt=nodeMap[e.target];
-    if(!src||!tgt||src._x===undefined||tgt._x===undefined)return;
+    if(!src||!tgt||src._cx===undefined||tgt._cx===undefined)return;
     g.append('line')
-      .attr('x1',src._x+PARA_W).attr('y1',src._y+PARA_H/2)
-      .attr('x2',tgt._x+PARA_W).attr('y2',tgt._y+PARA_H/2)
-      .attr('stroke','var(--border)').attr('stroke-width',1).attr('stroke-dasharray','4,3');
+      .attr('x1',src._cx).attr('y1',src._cy)
+      .attr('x2',tgt._cx).attr('y2',tgt._cy)
+      .attr('stroke','var(--purple)')
+      .attr('stroke-width',0.9)
+      .attr('stroke-opacity',0.18);
   });
-  // belongs_to (paragraph → argument)
+  edges.filter(e=>e.type==='section_next'||e.type==='context_next').forEach(e=>{
+    const src=nodeMap[e.source], tgt=nodeMap[e.target];
+    if(!src||!tgt||src._cx===undefined||tgt._cx===undefined)return;
+    g.append('line')
+      .attr('x1',src._cx).attr('y1',src._cy)
+      .attr('x2',tgt._cx).attr('y2',tgt._cy)
+      .attr('stroke',e.type==='context_next'?'var(--accent2)':'var(--border)')
+      .attr('stroke-width',e.type==='context_next'?1.4:0.8)
+      .attr('stroke-opacity',e.type==='context_next'?0.48:0.24)
+      .attr('stroke-dasharray',e.type==='context_next'?'':'4,5');
+  });
   edges.filter(e=>e.type==='belongs_to').forEach(e=>{
     const src=nodeMap[e.source], tgt=nodeMap[e.target];
-    if(!src||!tgt||tgt._x===undefined)return;
+    if(!src||!tgt||src._cx===undefined||tgt._x===undefined)return;
     g.append('line')
-      .attr('x1',src._x+PARA_W).attr('y1',src._y+PARA_H/2)
-      .attr('x2',tgt._x-ARG_R).attr('y2',tgt._y)
-      .attr('stroke','var(--fg3)').attr('stroke-width',0.5).attr('stroke-opacity',0.5);
+      .attr('x1',src._cx).attr('y1',src._cy)
+      .attr('x2',tgt._x).attr('y2',tgt._y)
+      .attr('stroke','var(--fg3)')
+      .attr('stroke-width',0.5)
+      .attr('stroke-opacity',0.26);
   });
-  // argument→argument relations
   edges.filter(e=>['supports','constrains','contradicts','refines'].includes(e.type)).forEach(e=>{
     const src=nodeMap[e.source], tgt=nodeMap[e.target];
     if(!src||!tgt||src._x===undefined||tgt._x===undefined)return;
@@ -623,57 +704,87 @@ function renderChapterContextGraph(containerId, data){
     g.append('line')
       .attr('x1',src._x).attr('y1',src._y)
       .attr('x2',tgt._x).attr('y2',tgt._y)
-      .attr('stroke',ec).attr('stroke-width',1).attr('stroke-opacity',0.5);
+      .attr('stroke',ec)
+      .attr('stroke-width',0.9)
+      .attr('stroke-opacity',0.32);
   });
 
-  // Draw chapter nodes
   chapters.forEach(ch=>{
     const isFM=ch.front_matter===true;
-    const cg=g.append('g').attr('cursor','pointer').attr('opacity',isFM?0.5:1);
-    cg.append('circle').attr('cx',ch._x).attr('cy',ch._y).attr('r',isFM?8:CH_R)
-      .attr('fill',isFM?'var(--fg3)':'var(--accent2)').attr('fill-opacity',isFM?0.4:0.85)
-      .attr('stroke',isFM?'var(--fg3)':'var(--accent2)').attr('stroke-opacity',0.3);
-    cg.append('text').attr('x',ch._x).attr('y',ch._y+(isFM?8:CH_R)+16)
-      .text(ch.label||'').attr('font-size',isFM?'10px':'13px').attr('font-weight',isFM?'400':'600')
-      .attr('fill',isFM?'var(--fg3)':'var(--fg)').attr('text-anchor','middle').attr('font-family','var(--font)');
+    const cg=g.append('g').datum(ch).attr('cursor','pointer').attr('opacity',isFM?0.45:1);
+    cg.append('circle')
+      .attr('cx',ch._x).attr('cy',ch._y).attr('r',isFM?9:CH_R)
+      .attr('fill',isFM?'var(--fg3)':'var(--accent2)')
+      .attr('fill-opacity',isFM?0.18:0.88)
+      .attr('stroke',isFM?'var(--fg3)':'var(--accent2)')
+      .attr('stroke-opacity',isFM?0.1:0.42)
+      .attr('stroke-width',1.6);
+    cg.append('text')
+      .attr('x',ch._x).attr('y',ch._y-24)
+      .text(keywordLabel(ch))
+      .attr('font-size',isFM?'10px':'12px')
+      .attr('font-weight',isFM?'500':'700')
+      .attr('text-anchor','middle')
+      .attr('fill',isFM?'var(--fg3)':'var(--fg)')
+      .attr('font-family','var(--font)');
     cg.on('click',()=>showNodeDetail(ch));
   });
 
-  // Draw paragraph nodes
+  contexts.forEach(ctx=>{
+    const isFM=ctx.front_matter===true;
+    const cg=g.append('g').datum(ctx).attr('cursor','pointer').attr('opacity',isFM?0.6:1);
+    cg.append('rect')
+      .attr('x',ctx._x).attr('y',ctx._y).attr('width',CTX_W).attr('height',CTX_H)
+      .attr('rx',10)
+      .attr('fill',ctx.strong_context?'var(--panel)':'var(--surface)')
+      .attr('stroke',isFM?'var(--fg3)':'var(--purple)')
+      .attr('stroke-opacity',ctx.strong_context?0.42:0.28);
+    cg.append('text')
+      .attr('x',ctx._cx).attr('y',ctx._cy+4)
+      .text(keywordLabel(ctx))
+      .attr('font-size','10px')
+      .attr('font-weight','600')
+      .attr('text-anchor','middle')
+      .attr('fill',isFM?'var(--fg3)':'var(--fg)')
+      .attr('font-family','var(--font)');
+    cg.on('click',()=>showNodeDetail(ctx));
+  });
+
   paragraphs.forEach(p=>{
-    const pg=g.append('g').attr('cursor','pointer');
-    pg.append('rect').attr('x',p._x).attr('y',p._y).attr('width',PARA_W).attr('height',PARA_H)
-      .attr('fill','var(--surface)').attr('stroke','var(--border)').attr('rx',4);
-    pg.append('text').attr('x',p._x+6).attr('y',p._y+15)
-      .text(trunc(p.label||'',35)).attr('font-size','10px')
-      .attr('fill','var(--fg2)').attr('font-family','var(--font)');
+    const pg=g.append('g').datum(p).attr('cursor','pointer').attr('opacity',0.9);
+    pg.append('circle')
+      .attr('cx',p._cx).attr('cy',p._cy).attr('r',PARA_R)
+      .attr('fill','var(--fg2)')
+      .attr('fill-opacity',0.55)
+      .attr('stroke','var(--border)')
+      .attr('stroke-opacity',0.18);
     pg.on('click',()=>showNodeDetail(p));
   });
 
-  // Draw argument nodes
   args.forEach(a=>{
-    const ag=g.append('g').attr('cursor','pointer');
-    ag.append('circle').attr('cx',a._x).attr('cy',a._y).attr('r',ARG_R)
-      .attr('fill',typeColor(a.type)).attr('fill-opacity',0.8)
-      .attr('stroke',typeColor(a.type)).attr('stroke-opacity',0.4);
+    const ag=g.append('g').datum(a).attr('cursor','pointer');
+    ag.append('circle')
+      .attr('cx',a._x).attr('cy',a._y).attr('r',ARG_R)
+      .attr('fill',typeColor(a.type))
+      .attr('fill-opacity',0.82)
+      .attr('stroke',typeColor(a.type))
+      .attr('stroke-opacity',0.28);
     ag.on('click',()=>showNodeDetail(a));
   });
 
   // Tooltip
   const tip=d3.select('#'+containerId).append('div').attr('class','graph-tooltip');
   g.selectAll('circle,rect').on('mouseover',(e,d)=>{
-    const n=d||(d3.select(e.target).datum&&d3.select(e.target).datum());
-    const node=n||{};
+    const node=d||{};
     tip.style('display','block').html(
       '<strong style="color:'+typeColor(node.type||'paragraph')+'">'+esc(node.type||'?')+'</strong><br>'+
       esc(trunc(node.fullText||node.label||'',300)));
   }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
    .on('mouseout',()=>tip.style('display','none'));
 
-  // Stats
   if(data.stats&&data.stats.has_more){
     svg.append('text').text('显示 '+data.stats.returned_nodes+'/'+data.stats.total_nodes+' 节点')
-      .attr('x',12).attr('y',maxY-12).attr('font-size','11px').attr('fill','var(--fg3)');
+      .attr('x',12).attr('y',S-12).attr('font-size','11px').attr('fill','var(--fg3)');
   }
 }
 
@@ -828,7 +939,7 @@ function resetGraphZoom(){_zoomTransform=null;loadSeriesGraph()}
 function showNodeDetail(node){
   const panel=document.getElementById('node-detail');
   if(!panel)return;
-  const typeLabel={chapter:'章节',paragraph:'文块',claim:'论点',evidence:'证据',limitation:'限制',concept:'概念'};
+  const typeLabel={chapter:'章节',context:'上下文组',paragraph:'文块',claim:'论点',evidence:'证据',limitation:'限制',concept:'概念'};
   panel.style.display='block';
   panel.innerHTML=
     '<h4 style="color:'+(node.type==='chapter'?'var(--accent2)':node.type==='claim'?'var(--accent)':node.type==='evidence'?'var(--green)':node.type==='limitation'?'var(--red)':'var(--fg)')+'">'+

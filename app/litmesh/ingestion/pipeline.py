@@ -34,6 +34,7 @@ from ..repair.repair_log import RepairLog
 from ..repair.fallback_llm import FallbackLLM
 from ..repair.repair_executor import RepairExecutor
 from ..repair.page_number_stripper import PageNumberStripper
+from ..structure.group_builder import GroupBuilder
 
 from ..extraction.combined_extractor import CombinedExtractor
 from ..extraction.concept_extractor import ConceptExtractor
@@ -286,6 +287,21 @@ class IngestionPipeline:
             logger.info("Repair report: %s", {
                 k: v for k, v in repair_report.items() if k != "elapsed_ms"
             })
+
+        # Structure layer: build StructureGroup hierarchy (v1)
+        try:
+            builder = GroupBuilder()
+            outline = parsed.outline if hasattr(parsed, 'outline') else None
+            groups = builder.build(
+                sections, paper_id=paper_card.paper_id,
+                graph_id=self.graph_id, outline_nodes=outline,
+            )
+            if groups:
+                self.db.delete_structure_groups(paper_card.paper_id)
+                count = self.db.insert_structure_groups(groups)
+                logger.info("Structure groups persisted: %d groups", count)
+        except Exception as e:
+            logger.warning("Failed to build structure groups: %s", e)
 
         if parsed.quality_report:
             self.db.insert_parse_quality_report(

@@ -50,9 +50,15 @@ class SectionBlock(BaseModel):
     display_title: str = Field(default="", description="Fallback display title when heading is unreliable")
     structure_status: StructureStatus = StructureStatus.CLEAN
 
+    # ---- Structure layer (v1) ----
+    block_role: str = Field(default="content", description="BlockRole: front/structural/context/content/noise")
+    structure_title: str = Field(default="", description="Structural anchor title from TOC/heading")
+    group_id: Optional[str] = Field(default=None, description="StructureGroup this block belongs to")
+
     # ---- Content ----
     raw_text: str = Field(description="Full text of this section")
     summary: str = Field(default="")
+    keyword_summary: str = Field(default="", description="Extracted keyword phrase for display title augmentation")
 
     # ---- Page reference ----
     page_start: Optional[int] = None

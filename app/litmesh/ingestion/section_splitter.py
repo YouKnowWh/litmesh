@@ -464,9 +464,83 @@ def split_parsed_document(
         if i > 0:
             section.prev_section_id = sections[i - 1].section_id
 
+    _augment_display_titles(sections)
+
     _log_quality_concerns(sections, paper_id)
 
     return sections
+
+
+def _augment_display_titles(sections: list[SectionBlock]):
+    """Enhance display_title for context/structural headings with keywords.
+
+    Uses structure/ module (language-agnostic) with repair/ fallback.
+    """
+    try:
+        from ..structure.role_classifier import RoleClassifier
+        from ..structure.title_augmenter import TitleAugmenter
+        from ..structure.block_role import BlockRole
+
+        classifier = RoleClassifier()
+        augmenter = TitleAugmenter()
+        n = len(sections)
+
+        augmented = 0
+        for i, section in enumerate(sections):
+            heading = section.heading or ""
+            heading_level = 1 if section.heading_path else (3 if heading else 0)
+            classify_text = heading if heading else section.raw_text[:200]
+            role = classifier.classify(
+                text=classify_text,
+                order_index=i,
+                total_blocks=n,
+                heading_level=heading_level,
+            )
+            section.block_role = role.value
+
+            if role in (BlockRole.CONTEXT, BlockRole.STRUCTURAL):
+                if heading:
+                    kw = augmenter.extractor.extract(section.raw_text, heading)
+                    if kw:
+                        section.keyword_summary = kw
+                    _, display = augmenter.generate(heading, section.raw_text, role.value)
+                    section.display_title = display
+                    augmented += 1
+            elif role == BlockRole.FRONT:
+                if heading:
+                    section.display_title = heading
+
+        if augmented:
+            logger.info("display_title_augmented sections=%d augmented=%d",
+                        len(sections), augmented)
+    except ImportError:
+        # Fallback to repair/
+        try:
+            from ..repair.keyword_extractor import KeywordExtractor as K
+            from ..repair.title_augmenter import TitleAugmenter as T
+            from ..repair.heading_classifier import HeadingClassifier as H, HeadingRole as HR
+            extractor = K()
+            augmenter = T(extractor)
+            classifier = H()
+            augmented = 0
+            for section in sections:
+                heading = section.heading or ""
+                if not heading:
+                    continue
+                role = classifier.classify(heading, heading_level=1)
+                if role in (HR.CONTEXT_HEADING, HR.STRUCTURAL_HEADING):
+                    kw = extractor.extract(section.raw_text, heading, role.value)
+                    if kw:
+                        section.keyword_summary = kw
+                        section.display_title = augmenter.augment(heading, section.raw_text, role.value)
+                        augmented += 1
+                elif role == HR.FRONT_MATTER:
+                    section.display_title = heading
+            if augmented:
+                logger.info("display_title_augmented (repair fallback) sections=%d augmented=%d",
+                            len(sections), augmented)
+        except ImportError:
+            pass
 
 
 def _log_quality_concerns(sections: list[SectionBlock], paper_id: str):
@@ -709,6 +783,8 @@ def _apply_outline_to_sections(sections: list[SectionBlock], outline: list[Outli
     # use global_order_index instead of page number for outline matching
     pages = {s.page_start for s in sections if not _is_reserved_section(s)}
     use_order = len(pages) <= 1 and (1 in pages or None in pages)
+    if use_order:
+        outline = _refine_order_only_outline_from_sections(outline, sections)
 
     for section in sections:
         if _is_reserved_section(section):
@@ -857,6 +933,158 @@ def _active_outline_path_by_order(
         path.append(chapter)
     path.append(latest)
     return path
+
+
+def _refine_order_only_outline_from_sections(
+    outline: list[OutlineItem], sections: list[SectionBlock]
+) -> list[OutlineItem]:
+    """Refine markdown-style outline body orders using section text evidence.
+
+    Some markdown/MinerU outputs preserve the TOC and chapter titles, but the
+    heading element order can drift badly in the latter half of the document.
+    When that happens, later TOC entries end up with body orders far beyond the
+    last content block, causing entire chapters to be absorbed into the previous
+    section. This pass uses the actual section text/display titles to pull TOC
+    entries back toward the earliest plausible matching section order.
+    """
+    ordered = [
+        item
+        for _, item in sorted(
+            enumerate(outline),
+            key=lambda pair: (
+                getattr(pair[1], "order_index", pair[0]) or pair[0],
+                pair[1].level,
+                pair[1].title,
+            ),
+        )
+    ]
+    content_sections = [
+        s for s in sorted(sections, key=lambda s: s.global_order_index or 0)
+        if not _is_reserved_section(s)
+    ]
+    if not content_sections:
+        return ordered
+
+    max_section_order = max((s.global_order_index or 0) for s in content_sections)
+    # If all outline anchors are already comfortably inside section range,
+    # keep the original ordering untouched.
+    if max((item.body_page or 0) for item in ordered) <= max_section_order:
+        return ordered
+
+    searchable = []
+    for s in content_sections:
+        title_text = normalize_title(" ".join(filter(None, [s.heading, s.display_title])))
+        body_text = normalize_title((s.raw_text or "")[:400])
+        searchable.append((s.global_order_index or 0, title_text, body_text))
+    available_orders = [order for order, _, _ in searchable]
+
+    def _find_match(item: OutlineItem, min_order: int) -> int:
+        keys = _outline_search_keys(item.title)
+        if not keys:
+            return 0
+        best_order = 0
+        best_score = 0
+        for order, title_text, body_text in searchable:
+            if order <= min_order:
+                continue
+            score = 0
+            for key in keys:
+                if len(key) < 2:
+                    continue
+                if key in title_text:
+                    score = max(score, 100 + len(key))
+                elif key in body_text:
+                    score = max(score, len(key))
+            if score > best_score:
+                best_order = order
+                best_score = score
+                if score >= 104:
+                    break
+        return best_order
+
+    last_order = 0
+    for item in ordered:
+        if item.level >= 2:
+            matched_order = _find_match(item, last_order)
+            if not matched_order and available_orders:
+                matched_order = next((order for order in available_orders if order > last_order), 0)
+            if matched_order and (not item.body_page or item.body_page > matched_order):
+                item.body_page = matched_order
+                item.page = matched_order
+            if not item.body_page:
+                item.body_page = max(1, last_order + 1)
+                item.page = item.body_page
+            if item.body_page <= last_order:
+                item.body_page = last_order + 1
+                item.page = item.body_page
+            last_order = item.body_page
+
+    # Pull chapter entries up to just before their first child section.
+    for i, item in enumerate(ordered):
+        if item.level > 1:
+            continue
+        child_orders = [
+            child.body_page or 0
+            for child in ordered[i + 1 :]
+            if child.level > item.level
+        ]
+        next_chapter_idx = next((j for j in range(i + 1, len(ordered)) if ordered[j].level <= item.level), len(ordered))
+        child_orders = [
+            child.body_page or 0
+            for child in ordered[i + 1 : next_chapter_idx]
+            if child.level > item.level
+        ]
+        if child_orders:
+            first_child = min(child_orders)
+            candidate = max(0, first_child - 1)
+            if not item.body_page or item.body_page > candidate:
+                item.body_page = candidate
+                item.page = candidate
+
+    # Final monotonic cleanup
+    prev = -1
+    prev_level = 0
+    for item in ordered:
+        current = item.body_page or item.page or 0
+        if current < prev or (current == prev and item.level <= prev_level):
+            current = prev + 1
+            item.body_page = current
+            item.page = current
+        prev = current
+        prev_level = item.level
+    return ordered
+
+
+def _outline_search_keys(title: str) -> list[str]:
+    """Generate normalized search keys for fuzzy section-to-outline matching."""
+    core = normalize_title(title)
+    core = re.sub(r"^第[一二三四五六七八九十\d]+[章节篇部]", "", core)
+    core = re.sub(r"^(chapter|section|part)[\divx]+", "", core)
+    core = core.strip()
+    if not core:
+        return []
+
+    candidates = [core]
+    if "的" in core:
+        suffix = core.split("的", 1)[-1]
+        if len(suffix) >= 3:
+            candidates.append(suffix)
+    if core.startswith("细胞") and len(core) > 4:
+        candidates.append(core[2:])
+    for part in re.split(r"[和与及、/（）()《》“”\"'·\-]+", core):
+        part = part.strip()
+        if len(part) >= 2:
+            candidates.append(part)
+    for ascii_term in re.findall(r"[a-z0-9]{2,}", core):
+        candidates.append(ascii_term)
+
+    seen = set()
+    ordered = []
+    for key in sorted(candidates, key=len, reverse=True):
+        if key and key not in seen:
+            ordered.append(key)
+            seen.add(key)
+    return ordered
 
 
 def _nearest_prior(outline: list[OutlineItem], item: OutlineItem, max_level: int) -> OutlineItem | None:

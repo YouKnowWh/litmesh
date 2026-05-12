@@ -5181,3 +5181,311 @@ httpx.RemoteProtocolError: Server disconnected without sending a response.
 2026-05-12 03:14:08 [INFO] litmesh.pipeline: v0.1 sections done: count=672 time=1.0s
 2026-05-12 03:14:09 [INFO] litmesh.pipeline: v0.1 series done: action=add_to_existing time=0.4s
 2026-05-12 03:14:09 [INFO] litmesh.pipeline: v0.1 complete: total_time=54.1s paper=paper_8d1854fcd950 sections=672 pages=1
+2026-05-12 08:54:11 [INFO] litmesh.pipeline: v0.1 start: pdf=data/普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf existing_paper=True
+2026-05-12 08:54:11 [INFO] litmesh.parser: parser_attempt parser=mineru_api mode=auto
+2026-05-12 08:54:11 [INFO] litmesh.parser: mineru_api start: file=普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf size=33548KB
+2026-05-12 08:55:32 [INFO] httpx: HTTP Request: POST https://api.82736541.xyz/file_parse "HTTP/1.1 200 OK"
+2026-05-12 08:55:33 [INFO] litmesh.parser: mineru_api done: file=普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf time=81.4s
+2026-05-12 08:55:33 [INFO] litmesh.pipeline: v0.1 parsing done: pages=1 parser=mineru_api time=81.5s
+2026-05-12 08:55:33 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 08:55:35 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3617 resp_len=235 time=1.9s tokens_in=2030 tokens_out=110
+2026-05-12 08:55:35 [INFO] litmesh.pipeline: v0.1 metadata done: title=生物学 必修1 分子与细胞 time=1.9s
+2026-05-12 08:55:35 [INFO] litmesh.outline: outline_apply_done sections=1249 chapter_assigned=1201 section_assigned=1176 fallback_heading=45
+2026-05-12 08:55:35 [INFO] litmesh.section: paragraph_stitch_summary merged=577 candidates=9 total=672
+2026-05-12 08:55:35 [INFO] litmesh.section: split_quality paper=paper_8d1854fcd950 sections=672 suspicious=71
+2026-05-12 08:55:35 [INFO] litmesh.pipeline: Outline nodes persisted: 25 entries
+2026-05-12 08:55:35 [INFO] litmesh.pipeline: Page number stripping: {'candidates_collected': 0, 'unique_patterns': 0, 'page_numbers_found': 0, 'stripped_sections': 0, 'llm_used': False, 'elapsed_ms': 0}
+2026-05-12 08:55:35 [INFO] litmesh.pipeline: Repair report: {'candidates_found': 566, 'auto_fixed': 0, 'grey_zone': 0, 'skipped': 0, 'llm_triggered': 0, 'llm_applied': 0, 'sections_before': 672, 'sections_after': 672}
+2026-05-12 08:55:36 [INFO] litmesh.pipeline: v0.1 sections done: count=672 time=1.1s
+2026-05-12 08:55:36 [INFO] litmesh.pipeline: v0.1 series done: action=add_to_existing time=0.0s
+2026-05-12 08:55:36 [INFO] litmesh.pipeline: v0.1 complete: total_time=84.5s paper=paper_8d1854fcd950 sections=672 pages=1
+2026-05-12 09:22:46 [INFO] litmesh: LitMesh starting up
+2026-05-12 09:22:46 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 09:22:46 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 09:22:46 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 09:22:46 [INFO] litmesh: LitMesh ready
+2026-05-12 09:49:02 [INFO] litmesh: LitMesh starting up
+2026-05-12 09:49:02 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 09:49:02 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 09:49:02 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 09:49:02 [INFO] litmesh: LitMesh ready
+2026-05-12 09:49:30 [INFO] litmesh: LitMesh starting up
+2026-05-12 09:49:31 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 09:49:31 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 09:49:31 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 09:49:31 [INFO] litmesh: LitMesh ready
+2026-05-12 10:17:11 [INFO] litmesh: LitMesh starting up
+2026-05-12 10:17:11 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 10:17:11 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 10:17:11 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 10:17:11 [INFO] litmesh: LitMesh ready
+2026-05-12 11:27:55 [INFO] litmesh: LitMesh starting up
+2026-05-12 11:27:55 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 11:27:55 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 11:27:55 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 11:27:55 [INFO] litmesh: LitMesh ready
+2026-05-12 11:38:39 [INFO] litmesh: LitMesh starting up
+2026-05-12 11:38:39 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 11:38:39 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 11:38:39 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 11:38:40 [INFO] litmesh: LitMesh ready
+2026-05-12 11:54:01 [INFO] litmesh: LitMesh starting up
+2026-05-12 11:54:01 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 11:54:01 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 11:54:01 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 11:54:01 [INFO] litmesh: LitMesh ready
+2026-05-12 11:54:36 [INFO] litmesh.pipeline: v0.1 start: pdf=data/普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf existing_paper=True
+2026-05-12 11:54:36 [INFO] litmesh.parser: parser_attempt parser=mineru_api mode=auto
+2026-05-12 11:54:36 [INFO] litmesh.parser: mineru_api start: file=普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf size=33548KB
+2026-05-12 11:54:37 [INFO] httpx: HTTP Request: POST https://api.82736541.xyz/file_parse "HTTP/1.1 530 <none>"
+2026-05-12 11:54:37 [INFO] litmesh.parser: parser_fallback from=mineru_api reason=mineru_api: failed (HTTPStatusError: Server error '530 <none>' for url 'https://api.82736541.xyz/file_parse'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/530)
+2026-05-12 11:54:37 [INFO] litmesh.parser: parser_attempt parser=external_markdown mode=auto
+2026-05-12 11:54:37 [INFO] litmesh.parser: parser_fallback from=external_markdown reason=external_markdown: unavailable (No markdown sidecar or LITMESH_MARKDOWN_COMMAND configured)
+2026-05-12 11:54:37 [INFO] litmesh.parser: parser_attempt parser=pdfplumber mode=auto
+2026-05-12 11:54:51 [INFO] litmesh.toc: toc_extract_start pages=146
+2026-05-12 11:54:51 [INFO] litmesh.toc: toc_extract_done entries=25 toc_pages=3 source=text_toc
+2026-05-12 11:54:51 [INFO] litmesh.toc: toc_alignment_done aligned=25 unaligned=0 offset=9 confidence=1.00
+2026-05-12 11:54:51 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:54:52 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:54:52 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:54:52 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:54:53 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3866 resp_len=291 time=1.6s tokens_in=1408 tokens_out=106
+2026-05-12 11:54:53 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3866 time=1.6s segments=2
+2026-05-12 11:54:53 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4612 resp_len=313 time=1.9s tokens_in=2108 tokens_out=117
+2026-05-12 11:54:53 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4612 time=1.9s segments=2
+2026-05-12 11:54:54 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:54:54 [INFO] litmesh.llm: model=deepseek-chat prompt_len=1814 resp_len=565 time=2.5s tokens_in=1045 tokens_out=200
+2026-05-12 11:54:54 [INFO] litmesh.segmenter: window LLM call: prompt_chars=1814 time=2.5s segments=4
+2026-05-12 11:54:54 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:00 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4056 resp_len=1750 time=6.6s tokens_in=2644 tokens_out=633
+2026-05-12 11:55:00 [WARNING] litmesh.segmenter: Window 6 LLM failed: LLM returned invalid JSON
+2026-05-12 11:55:00 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:00 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:00 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3612 resp_len=2597 time=8.8s tokens_in=2287 tokens_out=946
+2026-05-12 11:55:00 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3612 time=8.8s segments=20
+2026-05-12 11:55:03 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:04 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3439 resp_len=3288 time=11.5s tokens_in=2226 tokens_out=1215
+2026-05-12 11:55:04 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3439 time=11.5s segments=23
+2026-05-12 11:55:05 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:06 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3166 resp_len=1919 time=11.7s tokens_in=2096 tokens_out=686
+2026-05-12 11:55:06 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3166 time=11.7s segments=14
+2026-05-12 11:55:06 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:06 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2841 resp_len=1939 time=6.6s tokens_in=1944 tokens_out=704
+2026-05-12 11:55:06 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2841 time=6.6s segments=13
+2026-05-12 11:55:07 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:09 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3081 resp_len=433 time=2.1s tokens_in=2126 tokens_out=158
+2026-05-12 11:55:09 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3081 time=2.1s segments=3
+2026-05-12 11:55:09 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:09 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3616 resp_len=1116 time=4.7s tokens_in=2474 tokens_out=404
+2026-05-12 11:55:09 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3616 time=4.7s segments=8
+2026-05-12 11:55:09 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:10 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3479 resp_len=1110 time=4.0s tokens_in=2359 tokens_out=404
+2026-05-12 11:55:10 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3479 time=4.0s segments=8
+2026-05-12 11:55:10 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:15 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3943 resp_len=1376 time=5.1s tokens_in=2653 tokens_out=493
+2026-05-12 11:55:15 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3943 time=5.1s segments=10
+2026-05-12 11:55:15 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:16 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3310 resp_len=3036 time=15.7s tokens_in=2313 tokens_out=1145
+2026-05-12 11:55:16 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3310 time=15.7s segments=21
+2026-05-12 11:55:16 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:17 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4052 resp_len=2314 time=8.2s tokens_in=2817 tokens_out=828
+2026-05-12 11:55:17 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4052 time=8.2s segments=17
+2026-05-12 11:55:18 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:21 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4298 resp_len=1443 time=5.6s tokens_in=2899 tokens_out=534
+2026-05-12 11:55:21 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4298 time=5.6s segments=10
+2026-05-12 11:55:23 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:23 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3796 resp_len=4241 time=14.8s tokens_in=2632 tokens_out=1548
+2026-05-12 11:55:23 [WARNING] litmesh.segmenter: Window 13 LLM failed: LLM returned invalid JSON
+2026-05-12 11:55:24 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:24 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3996 resp_len=2617 time=9.5s tokens_in=2717 tokens_out=961
+2026-05-12 11:55:24 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3996 time=9.5s segments=19
+2026-05-12 11:55:24 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:24 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3901 resp_len=2019 time=7.1s tokens_in=2568 tokens_out=716
+2026-05-12 11:55:24 [WARNING] litmesh.segmenter: Window 18 LLM failed: LLM returned invalid JSON
+2026-05-12 11:55:25 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:29 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3280 resp_len=1918 time=7.9s tokens_in=2187 tokens_out=676
+2026-05-12 11:55:29 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3280 time=7.9s segments=14
+2026-05-12 11:55:30 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:30 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3720 resp_len=1891 time=7.1s tokens_in=2463 tokens_out=690
+2026-05-12 11:55:30 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3720 time=7.1s segments=13
+2026-05-12 11:55:31 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:31 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3596 resp_len=1603 time=6.2s tokens_in=2425 tokens_out=605
+2026-05-12 11:55:31 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3596 time=6.2s segments=10
+2026-05-12 11:55:31 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:33 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3761 resp_len=932 time=3.8s tokens_in=2527 tokens_out=317
+2026-05-12 11:55:33 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3761 time=3.8s segments=7
+2026-05-12 11:55:33 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:33 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3642 resp_len=2662 time=9.3s tokens_in=2418 tokens_out=990
+2026-05-12 11:55:33 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3642 time=9.3s segments=18
+2026-05-12 11:55:34 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:35 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3268 resp_len=940 time=4.3s tokens_in=2186 tokens_out=328
+2026-05-12 11:55:35 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3268 time=4.3s segments=7
+2026-05-12 11:55:35 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3567 resp_len=1062 time=4.2s tokens_in=2378 tokens_out=396
+2026-05-12 11:55:35 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3567 time=4.2s segments=7
+2026-05-12 11:55:35 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:35 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:39 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3040 resp_len=1522 time=5.1s tokens_in=2130 tokens_out=519
+2026-05-12 11:55:39 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3040 time=5.1s segments=11
+2026-05-12 11:55:39 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:40 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2774 resp_len=1250 time=4.9s tokens_in=2001 tokens_out=438
+2026-05-12 11:55:40 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2774 time=4.9s segments=9
+2026-05-12 11:55:40 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:40 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2661 resp_len=1593 time=5.5s tokens_in=1974 tokens_out=600
+2026-05-12 11:55:40 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2661 time=5.5s segments=11
+2026-05-12 11:55:41 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:41 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3158 resp_len=2495 time=7.7s tokens_in=2195 tokens_out=905
+2026-05-12 11:55:41 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3158 time=7.7s segments=17
+2026-05-12 11:55:41 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:47 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3298 resp_len=1533 time=6.2s tokens_in=2260 tokens_out=576
+2026-05-12 11:55:47 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3298 time=6.2s segments=10
+2026-05-12 11:55:47 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:50 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3507 resp_len=3101 time=10.9s tokens_in=2523 tokens_out=1150
+2026-05-12 11:55:50 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3507 time=10.9s segments=21
+2026-05-12 11:55:50 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:50 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3971 resp_len=2973 time=8.9s tokens_in=2625 tokens_out=1049
+2026-05-12 11:55:50 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3971 time=8.9s segments=21
+2026-05-12 11:55:50 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:52 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3020 resp_len=412 time=2.0s tokens_in=2117 tokens_out=151
+2026-05-12 11:55:52 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3020 time=2.0s segments=3
+2026-05-12 11:55:52 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:53 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3554 resp_len=1920 time=5.9s tokens_in=2445 tokens_out=667
+2026-05-12 11:55:53 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3554 time=5.9s segments=14
+2026-05-12 11:55:53 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:54 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3358 resp_len=697 time=2.7s tokens_in=2293 tokens_out=235
+2026-05-12 11:55:54 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3358 time=2.7s segments=5
+2026-05-12 11:55:55 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3284 resp_len=1297 time=4.8s tokens_in=2273 tokens_out=467
+2026-05-12 11:55:55 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3284 time=4.8s segments=9
+2026-05-12 11:55:55 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:55 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3134 resp_len=4537 time=15.2s tokens_in=2292 tokens_out=1673
+2026-05-12 11:55:55 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3134 time=15.2s segments=32
+2026-05-12 11:55:55 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:55 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:55:59 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3598 resp_len=953 time=3.9s tokens_in=2459 tokens_out=337
+2026-05-12 11:55:59 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3598 time=3.9s segments=7
+2026-05-12 11:55:59 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:02 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3642 resp_len=2504 time=9.5s tokens_in=2424 tokens_out=947
+2026-05-12 11:56:02 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3642 time=9.5s segments=16
+2026-05-12 11:56:02 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:02 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3224 resp_len=975 time=3.7s tokens_in=2274 tokens_out=344
+2026-05-12 11:56:02 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3224 time=3.7s segments=7
+2026-05-12 11:56:03 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:03 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3168 resp_len=2369 time=8.8s tokens_in=2167 tokens_out=878
+2026-05-12 11:56:03 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3168 time=8.8s segments=16
+2026-05-12 11:56:04 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:04 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3153 resp_len=2683 time=9.8s tokens_in=2152 tokens_out=977
+2026-05-12 11:56:04 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3153 time=9.8s segments=19
+2026-05-12 11:56:04 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:06 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3563 resp_len=1222 time=4.2s tokens_in=2413 tokens_out=435
+2026-05-12 11:56:06 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3563 time=4.2s segments=9
+2026-05-12 11:56:06 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:08 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4041 resp_len=989 time=4.1s tokens_in=2705 tokens_out=348
+2026-05-12 11:56:08 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4041 time=4.1s segments=7
+2026-05-12 11:56:08 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:10 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3627 resp_len=955 time=3.9s tokens_in=2450 tokens_out=336
+2026-05-12 11:56:10 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3951 resp_len=2150 time=7.7s tokens_in=2634 tokens_out=748
+2026-05-12 11:56:10 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3627 time=3.9s segments=7
+2026-05-12 11:56:10 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3951 time=7.7s segments=16
+2026-05-12 11:56:10 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:10 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:13 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3511 resp_len=1295 time=4.3s tokens_in=2336 tokens_out=464
+2026-05-12 11:56:13 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3511 time=4.3s segments=9
+2026-05-12 11:56:13 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:13 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3847 resp_len=848 time=3.3s tokens_in=2573 tokens_out=302
+2026-05-12 11:56:13 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3847 time=3.3s segments=6
+2026-05-12 11:56:14 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:15 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3523 resp_len=1052 time=4.4s tokens_in=2345 tokens_out=390
+2026-05-12 11:56:15 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3523 time=4.4s segments=7
+2026-05-12 11:56:15 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:19 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4077 resp_len=5428 time=15.8s tokens_in=2703 tokens_out=2000
+2026-05-12 11:56:19 [WARNING] litmesh.segmenter: Window 45 LLM failed: LLM returned invalid JSON
+2026-05-12 11:56:19 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3757 resp_len=1739 time=6.0s tokens_in=2546 tokens_out=582
+2026-05-12 11:56:19 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3757 time=6.0s segments=13
+2026-05-12 11:56:19 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:20 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:21 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3363 resp_len=2473 time=8.2s tokens_in=2253 tokens_out=862
+2026-05-12 11:56:21 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3363 time=8.2s segments=18
+2026-05-12 11:56:21 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:24 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3588 resp_len=1188 time=4.2s tokens_in=2465 tokens_out=431
+2026-05-12 11:56:24 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3588 time=4.2s segments=8
+2026-05-12 11:56:24 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:24 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4015 resp_len=3171 time=9.9s tokens_in=2792 tokens_out=1118
+2026-05-12 11:56:24 [WARNING] litmesh.segmenter: Window 53 LLM failed: LLM returned invalid JSON
+2026-05-12 11:56:25 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:30 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3819 resp_len=3252 time=10.3s tokens_in=2703 tokens_out=1220
+2026-05-12 11:56:30 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3819 time=10.3s segments=22
+2026-05-12 11:56:30 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:31 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4022 resp_len=1971 time=6.3s tokens_in=2656 tokens_out=705
+2026-05-12 11:56:31 [WARNING] litmesh.segmenter: Window 58 LLM failed: LLM returned invalid JSON
+2026-05-12 11:56:31 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:32 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4356 resp_len=2467 time=8.1s tokens_in=2911 tokens_out=861
+2026-05-12 11:56:32 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4356 time=8.1s segments=17
+2026-05-12 11:56:32 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:33 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3431 resp_len=933 time=3.5s tokens_in=2311 tokens_out=325
+2026-05-12 11:56:33 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3431 time=3.5s segments=7
+2026-05-12 11:56:33 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:34 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4064 resp_len=3631 time=13.5s tokens_in=2743 tokens_out=1310
+2026-05-12 11:56:34 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4064 time=13.5s segments=24
+2026-05-12 11:56:34 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:38 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2456 resp_len=1807 time=7.2s tokens_in=1759 tokens_out=643
+2026-05-12 11:56:38 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2456 time=7.3s segments=12
+2026-05-12 11:56:38 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:38 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2383 resp_len=1811 time=6.6s tokens_in=1728 tokens_out=658
+2026-05-12 11:56:38 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2383 time=6.6s segments=12
+2026-05-12 11:56:39 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:39 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3550 resp_len=1752 time=6.1s tokens_in=2507 tokens_out=612
+2026-05-12 11:56:39 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3550 time=6.1s segments=12
+2026-05-12 11:56:39 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:43 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3600 resp_len=2689 time=8.6s tokens_in=2465 tokens_out=958
+2026-05-12 11:56:43 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3600 time=8.6s segments=19
+2026-05-12 11:56:43 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:44 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3079 resp_len=1743 time=6.4s tokens_in=2059 tokens_out=616
+2026-05-12 11:56:44 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3079 time=6.4s segments=12
+2026-05-12 11:56:45 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:46 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3548 resp_len=2364 time=7.5s tokens_in=2353 tokens_out=852
+2026-05-12 11:56:46 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3548 time=7.5s segments=16
+2026-05-12 11:56:46 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3834 resp_len=822 time=3.1s tokens_in=2491 tokens_out=276
+2026-05-12 11:56:46 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3834 time=3.1s segments=6
+2026-05-12 11:56:46 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:46 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:47 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3919 resp_len=2142 time=7.3s tokens_in=2507 tokens_out=731
+2026-05-12 11:56:47 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3919 time=7.3s segments=15
+2026-05-12 11:56:47 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:48 [INFO] litmesh.llm: model=deepseek-chat prompt_len=2897 resp_len=423 time=1.6s tokens_in=1973 tokens_out=139
+2026-05-12 11:56:48 [INFO] litmesh.segmenter: window LLM call: prompt_chars=2897 time=1.6s segments=3
+2026-05-12 11:56:48 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:48 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3806 resp_len=1005 time=3.8s tokens_in=2467 tokens_out=350
+2026-05-12 11:56:48 [INFO] litmesh.segmenter: window LLM call: prompt_chars=3806 time=3.8s segments=7
+2026-05-12 11:56:49 [INFO] litmesh.llm: model=deepseek-chat prompt_len=1641 resp_len=453 time=2.0s tokens_in=1326 tokens_out=158
+2026-05-12 11:56:49 [INFO] litmesh.segmenter: window LLM call: prompt_chars=1641 time=2.0s segments=3
+2026-05-12 11:56:49 [INFO] litmesh.llm: model=deepseek-chat prompt_len=1256 resp_len=321 time=1.7s tokens_in=1136 tokens_out=118
+2026-05-12 11:56:49 [INFO] litmesh.segmenter: window LLM call: prompt_chars=1256 time=1.7s segments=2
+2026-05-12 11:56:53 [INFO] litmesh.llm: model=deepseek-chat prompt_len=4004 resp_len=2237 time=7.0s tokens_in=2612 tokens_out=792
+2026-05-12 11:56:53 [INFO] litmesh.segmenter: window LLM call: prompt_chars=4004 time=7.0s segments=15
+2026-05-12 11:56:54 [INFO] litmesh.parser: pdfplumber parse done: file=普通高中教科书 生物学 必修1 分子与细胞（文字版） (人民教育出版社课程教材研究所 生物课程教材研究开发中心编著) (z-library.sk, 1lib.sk, z-lib.sk).pdf pages=146 elements=466 segmenter=LLMPageSegmenter extract=14.4s total=136.8s
+2026-05-12 11:56:54 [INFO] litmesh.parser: quality_gate_done needs_structure_review=True reasons=['containment_duplicates_detected', 'paragraph_count_low_vs_pages']
+2026-05-12 11:56:54 [INFO] litmesh.parser: parser_fallback from=pdfplumber reason=pdfplumber: low quality
+2026-05-12 11:56:54 [INFO] litmesh.pipeline: v0.1 parsing done: pages=146 parser=pdfplumber time=137.7s
+2026-05-12 11:56:54 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:55 [INFO] litmesh.llm: model=deepseek-chat prompt_len=3617 resp_len=234 time=1.6s tokens_in=1420 tokens_out=109
+2026-05-12 11:56:55 [INFO] litmesh.pipeline: v0.1 metadata done: title=生物学必修1 分子与细胞 time=1.6s
+2026-05-12 11:56:55 [INFO] litmesh.outline: outline_apply_done sections=234 chapter_assigned=223 section_assigned=213 fallback_heading=8
+2026-05-12 11:56:55 [INFO] litmesh.section: toc_recovered mode=collected_toc_blocks blocks=12 text_len=5991
+2026-05-12 11:56:55 [INFO] litmesh.section: paragraph_stitch_summary merged=9 candidates=1 total=226
+2026-05-12 11:56:55 [INFO] litmesh.outline: display_title_augmented sections=226 augmented=203
+2026-05-12 11:56:55 [INFO] litmesh.section: split_quality paper=paper_8d1854fcd950 sections=226 suspicious=16
+2026-05-12 11:56:55 [INFO] litmesh.pipeline: Outline nodes persisted: 25 entries
+2026-05-12 11:56:55 [INFO] httpx: HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-05-12 11:56:56 [INFO] litmesh.llm: model=deepseek-chat prompt_len=590 resp_len=76 time=1.1s tokens_in=316 tokens_out=32
+2026-05-12 11:56:56 [INFO] litmesh.repair.page_number: Page number stripping: 1 unique patterns, 1 page numbers, 1 sections stripped, LLM=True, 1104ms
+2026-05-12 11:56:56 [INFO] litmesh.pipeline: Page number stripping: {'candidates_collected': 1, 'unique_patterns': 1, 'page_numbers_found': 1, 'stripped_sections': 1, 'llm_used': True, 'elapsed_ms': 1104}
+2026-05-12 11:56:56 [INFO] litmesh.pipeline: Repair report: {'candidates_found': 233, 'auto_fixed': 0, 'grey_zone': 0, 'skipped': 0, 'llm_triggered': 0, 'llm_applied': 0, 'sections_before': 226, 'sections_after': 226}
+2026-05-12 11:56:56 [WARNING] litmesh.pipeline: Failed to build structure groups: 'OutlineItem' object has no attribute 'get'
+2026-05-12 11:56:57 [INFO] litmesh.pipeline: v0.1 sections done: count=226 time=1.7s
+2026-05-12 11:56:58 [INFO] litmesh.pipeline: v0.1 series done: action=add_to_existing time=0.6s
+2026-05-12 11:56:58 [INFO] litmesh.pipeline: v0.1 complete: total_time=141.6s paper=paper_8d1854fcd950 sections=226 pages=146
+2026-05-12 12:09:45 [INFO] litmesh: LitMesh starting up
+2026-05-12 12:09:45 [INFO] litmesh: Database initialized: data/litmesh.db
+2026-05-12 12:09:45 [INFO] litmesh: LLM configs: ['extraction', 'segment', 'review', 'compilation', 'repair', 'default']
+2026-05-12 12:09:45 [INFO] litmesh: Embedding: openai_compatible/BAAI/bge-large-zh-v1.5 (dim=1024)
+2026-05-12 12:09:46 [INFO] litmesh: LitMesh ready

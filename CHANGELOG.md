@@ -42,6 +42,11 @@
 - **Markdown 目录恢复加强** — `markdown_adapter` 现在能识别“目录 heading 被装饰性 heading 打断后才出现真实目录段”的教材场景；同时在无 TOC block 的 fallback 下，只把 `structural/toc` 级 heading 放入 outline，不再把 `问题探讨/讨论/本节聚焦` 一股脑当目录结构
 - **无页码目录项与脏 TOC 降噪** — `toc_extractor` 现支持解析 `第1章 ...` / `第1节 ...` 这类无页码目录行；但若正文里找不到对应 heading，则不会把这类残缺目录项写进 outline，避免它们错误抢占前置材料和章节锚点
 - **chapter_context 单书图自动走 TOC 骨架** — 仅传 `graph_id` 且图内只有一本书时，`/graph-view?mode=chapter_context` 会自动推断 `paper_id` 并优先使用 `outline_nodes`；同时 `chapter_index<=0` 的前言/目录/出版信息不会再被强行提升成伪章节
+- **chapter_context 图重置为三层结构** — `/graph-view?mode=chapter_context` 现返回 `chapter -> context -> paragraph -> argument` 四层关系；前置材料被收进单独的“前置材料”章节与上下文组；同章内同标题、强上下文连续的文段会优先复用同一个 context 组，而不再在章节下平铺成一串重复点
+- **chapter_context 取消 300 节点硬截断** — 前端请求 `chapter_context` 视图时的默认 limit 从 `300` 提高到 `1200`，避免前置材料和前三章吃掉配额后，后续章节完全消失
+- **chapter_context 恢复可见节点间的其他关系边** — 除内建的 `chapter_contains/context_contains/section_next/context_next/belongs_to` 外，后端现会把图中已可见节点之间的其他 `graph_relations` 一并返回，后续一旦有 claim/evidence/concept 关系，不会在章节图里被静默吞掉
+- **chapter_context 布局改为真同心圆 + 关键词显示** — 章节图前端进一步收束为全局同心圆：chapter 位于内圈、context 位于中圈、paragraph 位于外圈、argument 位于最外圈；移除深色块状背景与 paragraph 长句标签，默认只显示 chapter/context 的关键词，显著减少黑点与文字糊屏
+- **order-only outline 锚定回拉** — 对 MinerU / Markdown 这类缺少可靠页码、只能按顺序锚定的文档，`section_splitter` 现在会用现有 section 的标题与正文文本反向校正后半段 TOC 条目的 `body_page/order`；重点修复第 5 章后半段、第 6 章这类晚期章节被错误吸附到前一节、导致图上“后面章节没有点”的问题
 - **Boundary-first bug 修复** — `_extract_text` 在 `end_quote` 缺失时不再触发 `orig_start` 未绑定错误
 - **Containment dedup** — 检测长段包含子段，保留长的拒收短的，计数入 `QualityReport.containment_duplicate_count`
 - **Role 分流** — LLM prompt 扩展类型枚举：body/heading/sidebar/activity/exercise/caption/table_text/toc/front_matter/header_footer/page_number/uncertain

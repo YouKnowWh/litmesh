@@ -90,6 +90,10 @@ class LitMeshDB:
             "section_index": "INTEGER NOT NULL DEFAULT 0",
             "block_index": "INTEGER NOT NULL DEFAULT 0",
             "global_order_index": "INTEGER NOT NULL DEFAULT 0",
+            "keyword_summary": "TEXT NOT NULL DEFAULT ''",
+            "block_role": "TEXT NOT NULL DEFAULT 'content'",
+            "structure_title": "TEXT NOT NULL DEFAULT ''",
+            "group_id": "TEXT",
             "toc_anchor_id": "TEXT",
             "toc_anchor_title": "TEXT",
             "parser_name": "TEXT NOT NULL DEFAULT ''",
@@ -224,6 +228,8 @@ class LitMeshDB:
             ("limitation_blocks", "paper_id"),
             ("section_blocks", "paper_id"),
             ("outline_nodes", "paper_id"),
+            ("group_members", "group_id IN (SELECT group_id FROM structure_groups WHERE paper_id = ?)"),
+            ("structure_groups", "paper_id"),
             ("source_spans", "paper_id"),
             ("extraction_runs", "paper_id"),
             ("extraction_run_items",
@@ -259,18 +265,24 @@ class LitMeshDB:
             """INSERT INTO section_blocks (section_id, graph_id, paper_id, heading,
                heading_path, heading_level, heading_confidence, display_title, structure_status,
                chapter_index, section_index, block_index, global_order_index,
-               raw_text, summary, page_start, page_end,
+               raw_text, summary, keyword_summary, block_role, structure_title, group_id,
+               page_start, page_end,
                toc_anchor_id, toc_anchor_title,
                parser_name, parser_element_id, parser_confidence,
                concept_keys, parent_section_id, prev_section_id, next_section_id, content_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (section.section_id, section.graph_id, section.paper_id, section.heading,
              _json_list(section.heading_path), section.heading_level.value,
              section.heading_confidence, section.display_title or "",
              section.structure_status.value if hasattr(section, 'structure_status') else "clean",
              section.chapter_index, section.section_index, section.block_index,
              section.global_order_index,
-             section.raw_text, section.summary, section.page_start, section.page_end,
+             section.raw_text, section.summary,
+             getattr(section, "keyword_summary", "") or "",
+             getattr(section, "block_role", "content") or "content",
+             getattr(section, "structure_title", "") or "",
+             getattr(section, "group_id", None) or None,
+             section.page_start, section.page_end,
              getattr(section, "toc_anchor_id", None) or None,
              getattr(section, "toc_anchor_title", None) or None,
              getattr(section, "parser_name", ""), getattr(section, "parser_element_id", ""),
@@ -326,6 +338,62 @@ class LitMeshDB:
         )
         self.conn.commit()
         return cur.rowcount
+
+    # ---- StructureGroup ----
+
+    def insert_structure_groups(self, groups: list) -> int:
+        """Batch-insert structure groups."""
+        count = 0
+        for g in groups:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO structure_groups
+                   (group_id, paper_id, graph_id, role, structure_title, display_title,
+                    keyword_summary, heading_path_json, parent_group_id, order_index, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (g.group_id, g.paper_id, g.graph_id, g.role,
+                 g.structure_title, g.display_title, g.keyword_summary,
+                 json.dumps(g.heading_path, ensure_ascii=False),
+                 g.parent_group_id, g.order_index, g.confidence),
+            )
+            # Insert members
+            for idx, sid in enumerate(g.child_section_ids):
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO group_members (group_id, section_id, member_order) VALUES (?, ?, ?)",
+                    (g.group_id, sid, idx),
+                )
+            count += 1
+        self.conn.commit()
+        return count
+
+    def get_groups_by_paper(self, paper_id: str) -> list[dict]:
+        """Return structure groups for a paper, ordered by order_index."""
+        rows = self.conn.execute(
+            "SELECT * FROM structure_groups WHERE paper_id = ? ORDER BY order_index",
+            (paper_id,),
+        ).fetchall()
+        groups = []
+        for r in rows:
+            g = dict(r)
+            members = self.conn.execute(
+                "SELECT section_id FROM group_members WHERE group_id = ? ORDER BY member_order",
+                (g["group_id"],),
+            ).fetchall()
+            g["child_section_ids"] = [m["section_id"] for m in members]
+            groups.append(g)
+        return groups
+
+    def delete_structure_groups(self, paper_id: str) -> int:
+        """Delete all groups and members for a paper."""
+        cur = self.conn.execute(
+            "DELETE FROM group_members WHERE group_id IN (SELECT group_id FROM structure_groups WHERE paper_id = ?)",
+            (paper_id,),
+        )
+        c1 = cur.rowcount
+        cur = self.conn.execute(
+            "DELETE FROM structure_groups WHERE paper_id = ?", (paper_id,),
+        )
+        self.conn.commit()
+        return c1 + cur.rowcount
 
     def insert_parse_quality_report(self, paper_id: str, graph_id: str, report) -> str:
         """Persist parser quality diagnostics for audit and extraction gating."""

@@ -75,6 +75,17 @@ def _seed_data(db):
             1, 1, 1, None, 1, 0.95, "toc_text",
         ),
     )
+    db.conn.execute(
+        """INSERT INTO outline_nodes
+           (outline_id, paper_id, graph_id, title, normalized_title, level,
+            toc_page, printed_page, body_page, parent_outline_id, order_index, confidence, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "ol_ui_sec1", p.paper_id, g.graph_id,
+            "第一节 测试小节", "第一节 测试小节", 2,
+            1, 1, 2, "ol_ui_ch1", 2, 0.93, "toc_text",
+        ),
+    )
 
     section = SectionBlock(
         graph_id=g.graph_id,
@@ -94,6 +105,24 @@ def _seed_data(db):
         toc_anchor_title="第一章 测试章节",
     )
     db.insert_section(section)
+    section2 = SectionBlock(
+        graph_id=g.graph_id,
+        paper_id=p.paper_id,
+        heading="第一节 测试小节",
+        heading_path=["第一章 测试章节", "第一节 测试小节"],
+        heading_level=HeadingLevel.SECTION,
+        display_title="这是第二段测试内容",
+        raw_text="这是第二段测试内容，用于 context 分组回归。",
+        page_start=2,
+        page_end=2,
+        chapter_index=1,
+        section_index=1,
+        block_index=2,
+        global_order_index=2,
+        toc_anchor_id="ol_ui_sec1",
+        toc_anchor_title="第一节 测试小节",
+    )
+    db.insert_section(section2)
     db.conn.commit()
 
     span = SourceSpan(span_id="span_ui01", paper_id=p.paper_id,
@@ -229,7 +258,10 @@ class TestUIEndpoints:
         payload = r.json()
         assert payload["mode"] == "chapter_context"
         chapters = [n for n in payload["nodes"] if n["type"] == "chapter"]
+        contexts = [n for n in payload["nodes"] if n["type"] == "context"]
         assert chapters
+        assert contexts
+        assert any(e["type"] == "context_contains" for e in payload["edges"])
         assert any(n["type"] == "paragraph" for n in payload["nodes"])
 
     def test_evidence_list(self, client):

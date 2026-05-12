@@ -15,3 +15,5 @@ from .fallback_llm import FallbackLLM, RepairLLMDecision
 from .repair_executor import RepairExecutor
 from .page_number_stripper import PageNumberStripper, PageNumberCandidate
 from .heading_classifier import HeadingClassifier, HeadingRole, classify_heading
+from .keyword_extractor import KeywordExtractor
+from .title_augmenter import TitleAugmenter

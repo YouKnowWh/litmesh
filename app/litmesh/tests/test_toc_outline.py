@@ -21,7 +21,9 @@ from app.litmesh.ingestion.parsers.markdown_adapter import (
 )
 from app.litmesh.ingestion.section_splitter import split_parsed_document, _strip_page_number
 from app.litmesh.ingestion.toc_extractor import TOCExtractor, parse_toc_line
+from app.litmesh.models.section import HeadingLevel, SectionBlock
 from app.litmesh.storage.sqlite import LitMeshDB
+from app.litmesh.structure.group_builder import GroupBuilder
 
 
 def test_auto_parser_prefers_remote_markdown_when_configured(monkeypatch):
@@ -365,6 +367,134 @@ def test_split_parsed_document_preserves_leading_year_in_raw_text():
     sections = split_parsed_document(parsed, "paper_year", "graph_year")
     assert len(sections) == 1
     assert sections[0].raw_text.startswith("1949 年，中国新民主主义革命胜利后")
+
+
+def test_order_only_outline_refines_late_toc_entries_from_section_text():
+    parsed = ParsedDocument(
+        pages=[{"page_num": 1, "text": "markdown-like document"}],
+        parser_name="mineru_api",
+        quality_report=QualityReport(parser_name="mineru_api"),
+        outline=[
+            OutlineItem(
+                title="第5章 细胞的能量供应和利用",
+                level=1,
+                page=1,
+                body_page=100,
+                normalized_title="第5章细胞的能量供应和利用",
+                confidence=0.9,
+                source="mineru_api",
+            ),
+            OutlineItem(
+                title="第1节 降低化学反应活化能的酶",
+                level=2,
+                page=1,
+                body_page=110,
+                normalized_title="第1节降低化学反应活化能的酶",
+                confidence=0.9,
+                source="mineru_api",
+            ),
+            OutlineItem(
+                title="第2节 细胞的能量“货币”ATP",
+                level=2,
+                page=1,
+                body_page=900,
+                normalized_title="第2节细胞的能量货币atp",
+                confidence=0.9,
+                source="mineru_api",
+            ),
+            OutlineItem(
+                title="第6章 细胞的生命历程",
+                level=1,
+                page=1,
+                body_page=1600,
+                normalized_title="第6章细胞的生命历程",
+                confidence=0.9,
+                source="mineru_api",
+            ),
+            OutlineItem(
+                title="第1节 细胞的增殖",
+                level=2,
+                page=1,
+                body_page=1700,
+                normalized_title="第1节细胞的增殖",
+                confidence=0.9,
+                source="mineru_api",
+            ),
+        ],
+        elements=[
+            ParsedElement(
+                element_id="p1",
+                type=ElementType.PARAGRAPH,
+                text="酶能够降低化学反应的活化能，从而显著提高细胞代谢效率。",
+                page_start=1,
+                order_index=120,
+                confidence=0.95,
+                role="body",
+            ),
+            ParsedElement(
+                element_id="p2",
+                type=ElementType.PARAGRAPH,
+                text="ATP是细胞生命活动的直接能源物质，ATP与ADP可以相互转化。",
+                page_start=1,
+                order_index=240,
+                confidence=0.95,
+                role="body",
+            ),
+            ParsedElement(
+                element_id="p3",
+                type=ElementType.PARAGRAPH,
+                text="细胞通过分裂进行增殖，这是个体生长、发育和组织更新的重要基础。",
+                page_start=1,
+                order_index=360,
+                confidence=0.95,
+                role="body",
+            ),
+        ],
+    )
+
+    sections = split_parsed_document(parsed, "paper_order_fix", "graph_order_fix")
+
+    assert len(sections) == 3
+    assert sections[0].toc_anchor_title == "第1节 降低化学反应活化能的酶"
+    assert sections[1].toc_anchor_title == "第2节 细胞的能量“货币”ATP"
+    assert sections[2].heading_path == ["第6章 细胞的生命历程", "第1节 细胞的增殖"]
+    assert sections[2].chapter_index == 2
+
+
+def test_group_builder_accepts_outlineitem_dataclasses_for_toc_title():
+    section = SectionBlock(
+        graph_id="graph_test",
+        paper_id="paper_test",
+        heading="第1章 走近细胞",
+        heading_path=["第1章 走近细胞"],
+        heading_level=HeadingLevel.CHAPTER,
+        raw_text="细胞是生命活动的基本单位。",
+        display_title="走近细胞",
+        toc_anchor_title="第1章 走近细胞",
+        global_order_index=1,
+    )
+    outline = [
+        OutlineItem(
+            title="第1章 走近细胞",
+            level=1,
+            page=10,
+            body_page=10,
+            normalized_title="第1章走近细胞",
+            confidence=0.9,
+            source="text_toc",
+        )
+    ]
+
+    groups = GroupBuilder().build(
+        [section],
+        paper_id="paper_test",
+        graph_id="graph_test",
+        outline_nodes=outline,
+    )
+
+    assert groups
+    assert groups[0].structure_title == "第1章 走近细胞"
+    assert section.structure_title == "第1章 走近细胞"
 
 
 def test_init_schema_adds_toc_anchor_columns_for_legacy_db(tmp_path):

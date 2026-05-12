@@ -58,6 +58,10 @@ class SectionBlock(BaseModel):
     page_start: Optional[int] = None
     page_end: Optional[int] = None
 
+    # ---- TOC anchor ----
+    toc_anchor_id: Optional[str] = Field(default=None, description="DocumentOutlineNode this block belongs to")
+    toc_anchor_title: Optional[str] = Field(default=None, description="Title of the TOC node this block anchors to")
+
     # ---- Parser provenance ----
     parser_name: str = Field(default="", description="Document parser that produced this block")
     parser_element_id: str = Field(default="", description="Stable element id from the parser output")

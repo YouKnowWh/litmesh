@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS section_blocks (
     summary TEXT NOT NULL DEFAULT '',
     page_start INTEGER,
     page_end INTEGER,
+    toc_anchor_id TEXT,
+    toc_anchor_title TEXT,
     parser_name TEXT NOT NULL DEFAULT '',
     parser_element_id TEXT NOT NULL DEFAULT '',
     parser_confidence REAL NOT NULL DEFAULT 1.0,
@@ -531,3 +533,26 @@ BEGIN UPDATE bridge_relations SET updated_at = datetime('now') WHERE bridge_id =
 
 CREATE TRIGGER IF NOT EXISTS trg_inbox_updated AFTER UPDATE ON review_inbox
 BEGIN UPDATE review_inbox SET updated_at = datetime('now') WHERE inbox_id = NEW.inbox_id; END;
+
+-- ---- Document Outline (TOC tree) ----
+
+CREATE TABLE IF NOT EXISTS outline_nodes (
+    outline_id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    normalized_title TEXT NOT NULL DEFAULT '',
+    level INTEGER NOT NULL DEFAULT 1,
+    toc_page INTEGER,
+    printed_page INTEGER,
+    body_page INTEGER,
+    parent_outline_id TEXT,
+    order_index INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.0,
+    source TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (paper_id) REFERENCES paper_cards(paper_id),
+    FOREIGN KEY (graph_id) REFERENCES series_graphs(graph_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_outline_paper ON outline_nodes(paper_id);
+CREATE INDEX IF NOT EXISTS idx_outline_parent ON outline_nodes(parent_outline_id);

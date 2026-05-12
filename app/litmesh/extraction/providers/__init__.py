@@ -64,7 +64,23 @@ class OpenAICompatibleProvider(BaseProvider):
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
         t0 = time.monotonic()
-        resp = httpx.post(url, json=body, headers=headers, timeout=180)
+        last_error = None
+        for attempt in range(3):
+            try:
+                resp = httpx.post(url, json=body, headers=headers, timeout=180)
+                break
+            except (httpx.RemoteProtocolError, httpx.ReadTimeout,
+                    httpx.ConnectTimeout, httpx.ConnectError) as e:
+                last_error = e
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning("LLM attempt %d failed (%s), retrying in %ds...",
+                                   attempt + 1, type(e).__name__, wait)
+                    time.sleep(wait)
+                else:
+                    raise
+        else:
+            raise last_error  # type: ignore[misc]
         dt = time.monotonic() - t0
         resp.raise_for_status()
         data = resp.json()

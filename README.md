@@ -61,8 +61,19 @@ PDF → MinerU API / Markdown sidecar / external command（优先）
 
 ```text
 POST $LITMESH_MINERU_API_URL
-multipart/form-data: file=<pdf>
-返回 text/markdown，或 JSON: {"markdown": "..."}
+multipart/form-data: files=<pdf>
+backend=pipeline
+return_md=true
+返回 JSON: {"results":{"document.pdf":{"md_content":"..."}}}
+也兼容直接返回 text/markdown，或 JSON: {"markdown": "..."}
+```
+
+当前台式机 MinerU 部署可直接这样配置：
+
+```bash
+LITMESH_MINERU_API_URL=https://api.82736541.xyz/file_parse
+LITMESH_MINERU_API_BACKEND=pipeline
+LITMESH_MINERU_API_RETURN_MD=true
 ```
 
 也可以把外部工具输出的 Markdown 放到 PDF 同目录同名 `.md`，或 `data/parsed_markdown/<pdf-stem>.md`，LitMesh 会优先使用它。

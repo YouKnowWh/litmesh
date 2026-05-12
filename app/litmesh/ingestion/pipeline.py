@@ -21,9 +21,19 @@ from ..models.extraction_run import ExtractionRun, ExtractionTarget, ExtractionS
 from ..models.review import ReviewInboxItem, InboxType, InboxPriority, InboxDecision
 from ..models.relation import GraphRelation, GraphRelationType
 
+import os
+
 from .metadata_extractor import MetadataExtractor
 from .parsers import parse_document
 from .section_splitter import split_parsed_document, split_sections
+
+from ..repair.candidate_detector import CandidateDetector
+from ..repair.reranker_client import RerankerClient
+from ..repair.repair_policy import RepairPolicy
+from ..repair.repair_log import RepairLog
+from ..repair.fallback_llm import FallbackLLM
+from ..repair.repair_executor import RepairExecutor
+from ..repair.page_number_stripper import PageNumberStripper
 
 from ..extraction.combined_extractor import CombinedExtractor
 from ..extraction.concept_extractor import ConceptExtractor
@@ -53,6 +63,7 @@ class IngestionPipeline:
         segment_llm_client=None,
         progress_tracker=None,
         task_id: str = "",
+        repair_mode: str = "",
     ):
         self.db = db
         self.llm = llm_client
@@ -63,10 +74,54 @@ class IngestionPipeline:
         self.segment_llm_client = segment_llm_client or llm_client
         self._tracker = progress_tracker
         self._task_id = task_id
+        self._repair_mode = repair_mode or os.environ.get("LITMESH_REPAIR_MODE", "dry_run")
+        self._repair_executor = None
+        self._page_stripper_enabled = os.environ.get("LITMESH_PAGE_NUMBER_STRIPPER", "llm") != "off"
+        self._page_stripper = None
 
     def _emit(self, stage: str, message: str, percentage: float, **metadata):
         if self._tracker and self._task_id:
             self._tracker.emit(self._task_id, stage, message, percentage, **metadata)
+
+    def _get_repair_executor(self) -> RepairExecutor:
+        """Lazy-init the repair executor with optional LLM fallback."""
+        if self._repair_executor is not None:
+            return self._repair_executor
+        log_dir = os.environ.get("LITMESH_REPAIR_LOG_DIR", "logs/repair_audit/")
+        log = RepairLog(log_dir=log_dir)
+        policy = RepairPolicy.from_env()
+        fallback_llm = None
+        if self._repair_mode == "full":
+            try:
+                from ..extraction.llm_config import load_endpoint
+                endpoint = load_endpoint("REPAIR")
+                repair_llm = endpoint.create_client()
+                fallback_llm = FallbackLLM(repair_llm)
+            except Exception as e:
+                logger.warning("Failed to create repair LLM client: %s", e)
+        self._repair_executor = RepairExecutor(
+            policy=policy,
+            fallback_llm=fallback_llm,
+            log=log,
+        )
+        return self._repair_executor
+
+    def _get_page_number_stripper(self) -> PageNumberStripper:
+        """Lazy-init the LLM-based page number stripper."""
+        if self._page_stripper is not None:
+            return self._page_stripper
+        mode = os.environ.get("LITMESH_PAGE_NUMBER_STRIPPER", "llm")
+        llm = None
+        if mode == "llm":
+            try:
+                from ..extraction.llm_config import load_endpoint
+                endpoint = load_endpoint("REPAIR")
+                llm = endpoint.create_client()
+            except Exception as e:
+                logger.warning("Failed to create page number LLM client: %s — "
+                               "falling back to regex", e)
+        self._page_stripper = PageNumberStripper(llm_client=llm)
+        return self._page_stripper
 
     def _ensure_graph(self, paper_card) -> str:
         """Auto-create a SeriesGraph if none provided."""
@@ -196,6 +251,42 @@ class IngestionPipeline:
                 pages=parsed.pages,
                 min_section_chars=40,
             )
+
+        # Persist outline nodes (TOC tree) from parsed document
+        if parsed.outline:
+            try:
+                from ..ingestion.section_splitter import _outline_items_to_nodes
+                outline_nodes = _outline_items_to_nodes(
+                    parsed.outline, paper_card.paper_id, self.graph_id,
+                )
+                if outline_nodes:
+                    self.db.delete_outline_nodes(paper_card.paper_id)
+                    count = self.db.insert_outline_nodes(outline_nodes)
+                    logger.info("Outline nodes persisted: %d entries", count)
+            except Exception as e:
+                logger.warning("Failed to persist outline nodes: %s", e)
+
+        # Page number stripping (LLM-based, before structural repair)
+        if self._page_stripper_enabled:
+            stripper = self._get_page_number_stripper()
+            sections, pn_report = stripper.process(
+                sections, paper_id=paper_card.paper_id,
+            )
+            logger.info("Page number stripping: %s", pn_report)
+
+        # Repair layer: structural diagnosis and repair (v0.3)
+        if self._repair_mode != "off":
+            repair_executor = self._get_repair_executor()
+            sections, repair_report = repair_executor.repair(
+                sections,
+                paper_id=paper_card.paper_id,
+                graph_id=self.graph_id,
+                mode=self._repair_mode,
+            )
+            logger.info("Repair report: %s", {
+                k: v for k, v in repair_report.items() if k != "elapsed_ms"
+            })
+
         if parsed.quality_report:
             self.db.insert_parse_quality_report(
                 paper_card.paper_id, self.graph_id, parsed.quality_report

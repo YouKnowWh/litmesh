@@ -126,6 +126,7 @@ pre{background:var(--raised);padding:14px;border-radius:8px;overflow:auto;font-s
   <button data-panel="series-graph">系列图</button>
   <button data-panel="bridge-graph">桥接图</button>
   <button data-panel="stats">统计</button>
+  <button data-panel="settings" style="margin-left:auto">设置</button>
 </nav>
 <main id="content"></main>
 
@@ -144,6 +145,7 @@ async function fetchJSON(url, opts) {
   return r.json();
 }
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function trunc(s,n){return(s||'').length>n?s.substring(0,n)+'…':s}
 function badge(t,c){return `<span class="badge bg-${c}">${esc(t)}</span>`}
 function toast(msg,ok){const t=document.createElement('div');t.className='toast '+(ok?'toast-ok':'toast-err');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),ok?3000:5000)}
 
@@ -157,6 +159,7 @@ async function loadPanel(name, opts={}){
     else if(name==='series-graph')await renderSeriesGraph(m, opts);
     else if(name==='bridge-graph')await renderBridgeGraph(m);
     else if(name==='stats')await renderStats(m);
+    else if(name==='settings')await renderSettings(m);
   }catch(e){m.innerHTML=`<p style="color:var(--red)">错误: ${esc(e.message)}</p>`}
 }
 
@@ -411,6 +414,7 @@ function renderPaperList(){
       +'<div class="actions">'
       +'<button class="btn btn-sm" onclick="viewPaperDetail(\''+p.paper_id+'\')">详情</button> '
       +'<button class="btn btn-sm btn-primary" onclick="viewPaperGraph(\''+(p.graph_id||'')+'\',\''+p.paper_id+'\')">查看图谱</button> '
+      +'<button class="btn btn-sm" onclick="reparsePaper(\''+p.paper_id+'\')">重新解析</button> '
       +'<button class="btn btn-sm btn-danger" onclick="deletePaper(\''+p.paper_id+'\')">删除</button>'
       +'</div></div>';
   }).join('');
@@ -431,7 +435,7 @@ async function viewPaperDetail(pid){
       </div>
     </div>
     <h3 style="margin-top:20px">章节 (${secs.count})</h3>
-    ${secs.sections.map(s=>`<div class="card"><h3>${esc(s.heading||'无标题')}</h3><div class="meta">${s.heading_path||''} · 第${s.page_start}-${s.page_end||'?'}页</div><div class="text">${esc((s.summary||s.raw_text||'').substring(0,250))}</div></div>`).join('')}
+    ${secs.sections.map(s=>`<div class="card"><h3>${esc(s.heading||'无标题')}</h3><div class="meta">${s.heading_path||''} · 第${s.page_start}-${s.page_end||'?'}页</div><div class="text">${esc(s.summary||s.raw_text||'')}</div></div>`).join('')}
     <h3 style="margin-top:20px">论点 (${claims.count})</h3>
     ${claims.claims.map(c=>`<div class="card"><div class="meta">${badge(c.claim_type,'blue')} ${badge(c.status,'green')} ${badge(c.importance,'dim')} · 置信度${(c.extraction_confidence*100).toFixed(0)}%</div><div class="text">${esc(c.claim_text)}</div></div>`).join('')||'<p style="color:var(--fg3)">暂无，需要运行抽取</p>'}`;
 }
@@ -441,6 +445,16 @@ async function deletePaper(pid){
     const r=await fetch(API+'papers/'+pid,{method:'DELETE'});
     if(r.ok){toast('删除成功',true);loadPanel('papers')}
     else{const d=await r.json();toast('删除失败: '+(d.detail||''),false)}
+  }catch(e){toast(e.message,false)}
+}
+async function reparsePaper(pid){
+  if(!confirm('将清空当前分段/论点/证据/限制数据，用最新代码重新解析 PDF。确定继续？'))return;
+  try{
+    toast('重新解析中...',true);
+    const r=await fetch(API+'papers/'+pid+'/reparse',{method:'POST'});
+    const d=await r.json();
+    if(r.ok){toast('重新解析完成: '+d.section_count+' 个章节',true);loadPanel('papers')}
+    else{toast('重新解析失败: '+(d.detail||''),false)}
   }catch(e){toast(e.message,false)}
 }
 function viewPaperGraph(gid,pid){$$('#tabs button').forEach(b=>b.classList.remove('active'));$('#tabs button[data-panel="series-graph"]').classList.add('active');loadPanel('series-graph',{graphId:gid,paperId:pid})}
@@ -457,7 +471,12 @@ async function renderSeriesGraph(m,opts={}){
       <button class="btn btn-sm" onclick="resetGraphZoom()">重置视图</button>
       <span style="font-size:11px;color:var(--fg3);margin-left:8px">滚轮缩放 · 拖拽平移 · 悬停查看详情</span>
     </div>
-    <div class="graph-container" id="graph-viz"><div class="empty-state"><div class="icon">⟳</div><p>加载中...</p></div></div>
+    <div style="display:flex;gap:12px">
+      <div class="graph-container" style="flex:1" id="graph-viz"><div class="empty-state"><div class="icon">⟳</div><p>加载中...</p></div></div>
+      <div class="card" id="node-detail" style="display:none;width:320px;flex-shrink:0;max-height:650px;overflow-y:auto;position:sticky;top:60px">
+        <p style="color:var(--fg3)">点击节点查看详情</p>
+      </div>
+    </div>
     <div class="graph-legend" id="graph-legend" style="display:none">
       <div class="item"><span class="dot" style="background:var(--accent)"></span> 论点 Claim</div>
       <div class="item"><span class="dot" style="background:var(--accent2)"></span> 证据 Evidence</div>
@@ -475,13 +494,187 @@ async function renderSeriesGraph(m,opts={}){
   window._selGraphId=gid;window._selPaperId=pid;
   loadSeriesGraph();
 }
-async function loadSeriesGraph(){
+async function loadSeriesGraph(mode){
   const gid=document.getElementById('sg-select')?.value||window._selGraphId;
   window._selGraphId=gid;
-  const url=API+'graph-view?graph_id='+encodeURIComponent(gid)+'&mode=paragraph&limit=300'+(window._selPaperId?'&paper_id='+window._selPaperId:'');
+  const viewMode=mode||'chapter_context';
+  const url=API+'graph-view?graph_id='+encodeURIComponent(gid)+'&mode='+viewMode+'&limit=300'+(window._selPaperId?'&paper_id='+window._selPaperId:'');
   const data=await fetchJSON(url);
+  data._mode=viewMode;
   document.getElementById('graph-legend').style.display='block';
-  renderParagraphGraph('graph-viz',data);
+  if(viewMode==='chapter_context')renderChapterContextGraph('graph-viz',data);
+  else renderParagraphGraph('graph-viz',data);
+}
+
+function renderChapterContextGraph(containerId, data){
+  const box=document.getElementById(containerId);
+  box.innerHTML='';
+  const W=box.clientWidth, H=Math.max(box.clientHeight||650, 650);
+  if(!data.nodes||!data.nodes.length){box.innerHTML='<div class=\"empty-state\"><div class=\"icon\">📭</div><p>该图暂无节点</p></div>';return}
+
+  const svg=d3.select('#'+containerId).append('svg').attr('width',W).attr('height',H)
+    .attr('viewBox',[0,0,W,H]);
+  const g=svg.append('g');
+
+  // Zoom
+  const zoom=d3.zoom().scaleExtent([0.2,6]).on('zoom',e=>g.attr('transform',e.transform));
+  svg.call(zoom);
+  svg.on('wheel.zoom',e=>{
+    e.preventDefault();
+    const tr=d3.zoomTransform(svg.node());
+    const k=tr.k*(1-e.deltaY*0.002);
+    const ck=Math.max(0.2,Math.min(6,k));
+    const mx=e.offsetX,my=e.offsetY;
+    const x=mx-(mx-tr.x)*ck/tr.k;
+    const y=my-(my-tr.y)*ck/tr.k;
+    svg.call(zoom.transform,d3.zoomIdentity.translate(x,y).scale(ck));
+  },{passive:false});
+
+  const nodes=data.nodes, edges=data.edges||[];
+  const nodeMap={}; nodes.forEach(n=>nodeMap[n.id]=n);
+
+  // Layout constants
+  const CH_X=40, CH_R=12, CH_GAP=140;  // chapter column
+  const PARA_X=CH_X+CH_R+60, PARA_W=140, PARA_H=22, PARA_GAP=8;
+  const ARG_X_OFFSET=PARA_W+16, ARG_R=5;
+
+  // Separate nodes by type
+  const chapters=nodes.filter(n=>n.type==='chapter').sort((a,b)=>(a.order||0)-(b.order||0));
+  const paragraphs=nodes.filter(n=>n.type==='paragraph');
+  const args=nodes.filter(n=>n.type==='claim'||n.type==='evidence'||n.type==='limitation');
+
+  // Position chapters vertically
+  const chY={};
+  chapters.forEach((ch,i)=>{
+    ch._x=CH_X; ch._y=60+i*CH_GAP;
+    chY[ch.id]=ch._y;
+  });
+
+  // Position paragraphs within their chapter
+  const paraPos={}, chParaCount={};
+  paragraphs.forEach(p=>{
+    const cid=p.chapter_id||'';
+    if(!chParaCount[cid])chParaCount[cid]=0;
+    const idx=chParaCount[cid]++;
+    const baseY=(chY[cid]||60)-30;
+    p._x=PARA_X; p._y=baseY+idx*(PARA_H+PARA_GAP);
+    paraPos[p.id]={x:p._x,y:p._y};
+  });
+
+  // Position arguments near their paragraph
+  const argBySection={};
+  edges.forEach(e=>{if(e.type==='belongs_to'){if(!argBySection[e.source])argBySection[e.source]=[];argBySection[e.source].push(e.target);}});
+  args.forEach(a=>{
+    // Find which section this belongs to via belongs_to edge
+    const be=edges.find(e=>e.target===a.id&&e.type==='belongs_to');
+    const secId=be?be.source:null;
+    const pp=secId?paraPos[secId]:null;
+    const off=secId?(argBySection[secId]?.indexOf(a.id)||0):0;
+    a._x=pp?pp.x+ARG_X_OFFSET:PARA_X+ARG_X_OFFSET;
+    a._y=pp?pp.y+off*14:60;
+  });
+
+  // Extend SVG height
+  const maxY=Math.max(...paragraphs.map(p=>p._y||0),60+chapters.length*CH_GAP)+60;
+  svg.attr('height',Math.max(H,maxY)).attr('viewBox',[0,0,W,Math.max(H,maxY)]);
+
+  // Color by type
+  function typeColor(t){
+    if(t==='chapter')return'var(--accent2)';
+    if(t==='claim')return'var(--accent)';
+    if(t==='evidence')return'var(--green)';
+    if(t==='limitation')return'var(--red)';
+    return'var(--fg2)';
+  }
+
+  // Draw edges first (behind nodes)
+  // chapter_contains
+  edges.filter(e=>e.type==='chapter_contains').forEach(e=>{
+    const src=nodeMap[e.source], tgt=nodeMap[e.target];
+    if(!src||!tgt||tgt._x===undefined)return;
+    g.append('line')
+      .attr('x1',src._x+CH_R).attr('y1',src._y)
+      .attr('x2',tgt._x).attr('y2',tgt._y+PARA_H/2)
+      .attr('stroke','var(--accent2)').attr('stroke-width',2).attr('stroke-opacity',0.4);
+  });
+  // section_next
+  edges.filter(e=>e.type==='section_next').forEach(e=>{
+    const src=nodeMap[e.source], tgt=nodeMap[e.target];
+    if(!src||!tgt||src._x===undefined||tgt._x===undefined)return;
+    g.append('line')
+      .attr('x1',src._x+PARA_W).attr('y1',src._y+PARA_H/2)
+      .attr('x2',tgt._x+PARA_W).attr('y2',tgt._y+PARA_H/2)
+      .attr('stroke','var(--border)').attr('stroke-width',1).attr('stroke-dasharray','4,3');
+  });
+  // belongs_to (paragraph → argument)
+  edges.filter(e=>e.type==='belongs_to').forEach(e=>{
+    const src=nodeMap[e.source], tgt=nodeMap[e.target];
+    if(!src||!tgt||tgt._x===undefined)return;
+    g.append('line')
+      .attr('x1',src._x+PARA_W).attr('y1',src._y+PARA_H/2)
+      .attr('x2',tgt._x-ARG_R).attr('y2',tgt._y)
+      .attr('stroke','var(--fg3)').attr('stroke-width',0.5).attr('stroke-opacity',0.5);
+  });
+  // argument→argument relations
+  edges.filter(e=>['supports','constrains','contradicts','refines'].includes(e.type)).forEach(e=>{
+    const src=nodeMap[e.source], tgt=nodeMap[e.target];
+    if(!src||!tgt||src._x===undefined||tgt._x===undefined)return;
+    const ec=e.type==='supports'?'var(--green)':e.type==='constrains'?'var(--red)':e.type==='contradicts'?'var(--orange)':'var(--accent)';
+    g.append('line')
+      .attr('x1',src._x).attr('y1',src._y)
+      .attr('x2',tgt._x).attr('y2',tgt._y)
+      .attr('stroke',ec).attr('stroke-width',1).attr('stroke-opacity',0.5);
+  });
+
+  // Draw chapter nodes
+  chapters.forEach(ch=>{
+    const isFM=ch.front_matter===true;
+    const cg=g.append('g').attr('cursor','pointer').attr('opacity',isFM?0.5:1);
+    cg.append('circle').attr('cx',ch._x).attr('cy',ch._y).attr('r',isFM?8:CH_R)
+      .attr('fill',isFM?'var(--fg3)':'var(--accent2)').attr('fill-opacity',isFM?0.4:0.85)
+      .attr('stroke',isFM?'var(--fg3)':'var(--accent2)').attr('stroke-opacity',0.3);
+    cg.append('text').attr('x',ch._x).attr('y',ch._y+(isFM?8:CH_R)+16)
+      .text(ch.label||'').attr('font-size',isFM?'10px':'13px').attr('font-weight',isFM?'400':'600')
+      .attr('fill',isFM?'var(--fg3)':'var(--fg)').attr('text-anchor','middle').attr('font-family','var(--font)');
+    cg.on('click',()=>showNodeDetail(ch));
+  });
+
+  // Draw paragraph nodes
+  paragraphs.forEach(p=>{
+    const pg=g.append('g').attr('cursor','pointer');
+    pg.append('rect').attr('x',p._x).attr('y',p._y).attr('width',PARA_W).attr('height',PARA_H)
+      .attr('fill','var(--surface)').attr('stroke','var(--border)').attr('rx',4);
+    pg.append('text').attr('x',p._x+6).attr('y',p._y+15)
+      .text(trunc(p.label||'',35)).attr('font-size','10px')
+      .attr('fill','var(--fg2)').attr('font-family','var(--font)');
+    pg.on('click',()=>showNodeDetail(p));
+  });
+
+  // Draw argument nodes
+  args.forEach(a=>{
+    const ag=g.append('g').attr('cursor','pointer');
+    ag.append('circle').attr('cx',a._x).attr('cy',a._y).attr('r',ARG_R)
+      .attr('fill',typeColor(a.type)).attr('fill-opacity',0.8)
+      .attr('stroke',typeColor(a.type)).attr('stroke-opacity',0.4);
+    ag.on('click',()=>showNodeDetail(a));
+  });
+
+  // Tooltip
+  const tip=d3.select('#'+containerId).append('div').attr('class','graph-tooltip');
+  g.selectAll('circle,rect').on('mouseover',(e,d)=>{
+    const n=d||(d3.select(e.target).datum&&d3.select(e.target).datum());
+    const node=n||{};
+    tip.style('display','block').html(
+      '<strong style="color:'+typeColor(node.type||'paragraph')+'">'+esc(node.type||'?')+'</strong><br>'+
+      esc(trunc(node.fullText||node.label||'',300)));
+  }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
+   .on('mouseout',()=>tip.style('display','none'));
+
+  // Stats
+  if(data.stats&&data.stats.has_more){
+    svg.append('text').text('显示 '+data.stats.returned_nodes+'/'+data.stats.total_nodes+' 节点')
+      .attr('x',12).attr('y',maxY-12).attr('font-size','11px').attr('fill','var(--fg3)');
+  }
 }
 
 function renderParagraphGraph(containerId, data){
@@ -512,6 +705,17 @@ function renderParagraphGraph(containerId, data){
   const totalH=paragraphs.length*(paraH+paraGap)+40;
   const zoom=d3.zoom().scaleExtent([0.3,5]).on('zoom',e=>g.attr('transform',e.transform));
   svg.call(zoom);
+  // Custom wheel handler for trackpad compatibility
+  svg.on('wheel.zoom',e=>{
+    e.preventDefault();
+    const tr=d3.zoomTransform(svg.node());
+    const k=tr.k*(1-e.deltaY*0.002);
+    const ck=Math.max(0.3,Math.min(5,k));
+    const mx=e.offsetX,my=e.offsetY;
+    const x=mx-(mx-tr.x)*ck/tr.k;
+    const y=my-(my-tr.y)*ck/tr.k;
+    svg.call(zoom.transform,d3.zoomIdentity.translate(x,y).scale(ck));
+  },{passive:false});
 
   // Draw section_next edges (main chain)
   const chainEdges=data.edges.filter(e=>e.type==='section_next'&&paraX[e.source]&&paraX[e.target]);
@@ -528,7 +732,7 @@ function renderParagraphGraph(containerId, data){
     .attr('opacity',0.9);
   g.selectAll('text.para').data(paragraphs).join('text')
     .attr('x',d=>paraX[d.id].x+6).attr('y',d=>paraX[d.id].y+18)
-    .text(d=>(d.label||'P'+(d.page||'')).substring(0,70))
+    .text(d=>trunc(d.label||'P'+(d.page||''),70))
     .attr('font-size','11px').attr('fill','var(--fg2)').attr('font-family','var(--font)');
 
   // Attach claims to their paragraph (find via belongs_to edge)
@@ -559,13 +763,13 @@ function renderParagraphGraph(containerId, data){
 
   g.selectAll('text.claim-label').data(visibleClaims.slice(0,50)).join('text')
     .attr('x',d=>d._x+8).attr('y',d=>d._y+3)
-    .text(d=>(d.label||'').substring(0,35))
+    .text(d=>trunc(d.label||'',35))
     .attr('font-size','9px').attr('fill','var(--fg2)').attr('font-family','var(--font)');
 
   // Tooltip
   const tip=d3.select('#'+containerId).append('div').attr('class','graph-tooltip');
   g.selectAll('circle.claim,rect.para').on('mouseover',(e,d)=>{
-    tip.style('display','block').html('<strong>'+esc(d.type)+'</strong><br>'+esc((d.label||d.text||'').substring(0,150)));
+    tip.style('display','block').html('<strong>'+esc(d.type)+'</strong><br>'+esc(trunc(d.fullText||d.text||d.label||'',500)));
   }).on('mousemove',e=>{tip.style('left',(e.offsetX+12)+'px').style('top',(e.offsetY-10)+'px')})
    .on('mouseout',()=>tip.style('display','none'));
 
@@ -621,6 +825,20 @@ function buildBridgeGraphData(bridges){
 // ---- D3 Force Graph ----
 let _zoomTransform=null;
 function resetGraphZoom(){_zoomTransform=null;loadSeriesGraph()}
+function showNodeDetail(node){
+  const panel=document.getElementById('node-detail');
+  if(!panel)return;
+  const typeLabel={chapter:'章节',paragraph:'文块',claim:'论点',evidence:'证据',limitation:'限制',concept:'概念'};
+  panel.style.display='block';
+  panel.innerHTML=
+    '<h4 style="color:'+(node.type==='chapter'?'var(--accent2)':node.type==='claim'?'var(--accent)':node.type==='evidence'?'var(--green)':node.type==='limitation'?'var(--red)':'var(--fg)')+'">'+
+    esc(typeLabel[node.type]||node.type)+'</h4>'+
+    '<div style="font-size:12px;color:var(--fg2);margin:4px 0">'+esc(node.label||'')+'</div>'+
+    (node.fullText?'<div class="text" style="max-height:300px;overflow-y:auto;white-space:pre-wrap">'+esc(node.fullText)+'</div>':'')+
+    (node.confidence!==undefined?'<div class="meta">置信度: '+(node.confidence*100).toFixed(0)+'%</div>':'')+
+    (node.page?'<div class="meta">页码: '+node.page+'</div>':'')+
+    '<button class="btn btn-sm" style="margin-top:8px" onclick="document.getElementById(\'node-detail\').style.display=\'none\'">关闭</button>';
+}
 
 function renderForceGraph(containerId,data,mode='series'){
   const box=document.getElementById(containerId);
@@ -651,9 +869,9 @@ function renderForceGraph(containerId,data,mode='series'){
     // Limit nodes to prevent browser freeze (top 200 by confidence, plus all concepts/limitations)
     const MAX_CLAIMS=150, MAX_EVIDENCE=30, MAX_LIMITATIONS=20;
     const topClaims=(data.claims||[]).sort((a,b)=>(b.extraction_confidence||0)-(a.extraction_confidence||0)).slice(0,MAX_CLAIMS);
-    topClaims.forEach(c=>addNode(c.claim_id,c.claim_text?.substring(0,50)||c.claim_id,'claim',{fullText:c.claim_text,conf:c.extraction_confidence,ctype:c.claim_type}));
-    (data.evidence||[]).slice(0,MAX_EVIDENCE).forEach(e=>addNode(e.evidence_id,e.evidence_text?.substring(0,50)||e.evidence_id,'evidence',{fullText:e.evidence_text,strength:e.strength}));
-    (data.limitations||[]).slice(0,MAX_LIMITATIONS).forEach(l=>addNode(l.limitation_id,l.limitation_text?.substring(0,50)||l.limitation_id,'limitation',{fullText:l.limitation_text,severity:l.severity}));
+    topClaims.forEach(c=>addNode(c.claim_id,trunc(c.claim_text,50)||c.claim_id,'claim',{fullText:c.claim_text,conf:c.extraction_confidence,ctype:c.claim_type}));
+    (data.evidence||[]).slice(0,MAX_EVIDENCE).forEach(e=>addNode(e.evidence_id,trunc(e.evidence_text,50)||e.evidence_id,'evidence',{fullText:e.evidence_text,strength:e.strength}));
+    (data.limitations||[]).slice(0,MAX_LIMITATIONS).forEach(l=>addNode(l.limitation_id,trunc(l.limitation_text,50)||l.limitation_id,'limitation',{fullText:l.limitation_text,severity:l.severity}));
     (data.concepts||[]).forEach(c=>addNode(c.concept_key,c.label_zh||c.concept_key,'concept',{fullText:c.definition,namespace:c.namespace}));
     window._graphNote=topClaims.length<(data.claims||[]).length?`显示 ${topClaims.length}/${data.claims.length} 条论点（按置信度排序）`:'';
   }
@@ -775,7 +993,7 @@ function renderForceGraph(containerId,data,mode='series'){
 
   // Labels for larger nodes
   node.filter(d=>d.r>=6).append('text')
-    .text(d=>(d.label||'').substring(0,25))
+    .text(d=>trunc(d.label||'',25))
     .attr('x',d=>d.r+4).attr('y',3)
     .attr('font-size','10px').attr('fill','var(--fg2)')
     .attr('font-family','var(--font)');
@@ -785,8 +1003,8 @@ function renderForceGraph(containerId,data,mode='series'){
   node.on('mouseover',(e,d)=>{
     tip.style('display','block')
       .html(`<div class="tt-type" style="color:${getNodeColor(d.nType)}">${d.nType.toUpperCase()}</div>
-        <div style="font-weight:600;margin-bottom:2px">${esc((d.label||'').substring(0,80))}</div>
-        ${d.fullText?`<div class="tt-text">${esc(d.fullText.substring(0,150))}</div>`:''}
+        <div style="font-weight:600;margin-bottom:2px">${esc(trunc(d.label||'',80))}</div>
+        ${d.fullText?`<div class="tt-text">${esc(trunc(d.fullText,300))}</div>`:''}
         ${d.conf!==undefined?`<div style="font-size:10px;color:var(--fg2);margin-top:2px">置信度: ${(d.conf*100).toFixed(0)}%</div>`:''}
         ${d.ctype?`<div style="font-size:10px;color:var(--fg2)">类型: ${esc(d.ctype)}</div>`:''}
         ${d.strength?`<div style="font-size:10px;color:var(--fg2)">强度: ${esc(d.strength)}</div>`:''}
@@ -858,7 +1076,7 @@ function renderInboxList(){
         <div>
           <strong>${esc(i.title)}</strong>
           <div class="meta">${badge(i.inbox_type,'blue')} ${badge(i.item_type,'dim')} ${badge(i.priority,pc[i.priority]==='high'?'red':pc[i.priority]==='medium'?'orange':'dim')} · ${(i.extraction_confidence*100).toFixed(0)}%</div>
-          <div class="text">${esc((i.description||i.source_text||'').substring(0,200))}</div>
+          <div class="text">${esc(trunc(i.description||i.source_text||'',500))}</div>
         </div>
         <div class="actions" style="flex-shrink:0">
           <button class="btn btn-sm btn-success" onclick="inboxAct('${i.inbox_id}','approve')">✓ 通过</button>
@@ -884,6 +1102,117 @@ async function renderStats(m){
   const labels={corpora:'语料库',series_graphs:'系列图',paper_cards:'论文',section_blocks:'章节',source_spans:'原文片段',claim_blocks:'论点',evidence_blocks:'证据',limitation_blocks:'局限',concept_keys:'概念',graph_relations:'图关系',bridge_relations:'桥接',extraction_runs:'抽取运行',review_inbox:'待审核'};
   m.innerHTML=`<h2>数据库统计</h2>
     <div class="stats-grid">${Object.entries(stats).map(([k,v])=>`<div class="stat-card"><div class="num">${v}</div><div class="label">${labels[k]||k}</div></div>`).join('')}</div>`;
+}
+
+// ---- Settings ----
+async function renderSettings(m){
+  m.innerHTML='<h2>设置</h2><div id="settings-form"><p style="color:var(--fg2)">加载中...</p></div>';
+  try{
+    const cfg=await fetchJSON(API+'admin/config');
+    const llmRoles=['extraction','segment','review','compilation','default'];
+    const llmLabels={extraction:'抽取',segment:'分段',review:'审核',compilation:'编译',default:'默认'};
+    const providers=['openai_compatible','openai','anthropic','gemini'];
+
+    let h='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:14px">';
+
+    // LLM section
+    h+='<div class="card" style="grid-column:1/-1"><h3>LLM 模型配置</h3>';
+    llmRoles.forEach(role=>{
+      const c=cfg.llm[role]||{};
+      h+='<div style="margin-bottom:12px;padding:10px;background:var(--raised);border-radius:8px">';
+      h+='<div style="font-weight:600;margin-bottom:8px;color:var(--accent)">'+llmLabels[role]+' ('+role+')</div>';
+      h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+      h+=_settingRow('Provider','llm_'+role+'_provider',c.provider||'',{type:'select',opts:providers});
+      h+=_settingRow('Model','llm_'+role+'_model',c.model||'');
+      h+=_settingRow('Base URL','llm_'+role+'_base_url',c.base_url||'');
+      h+=_settingRow('API Key','llm_'+role+'_api_key','',{type:'password',ph:c.api_key_masked||'未设置'});
+      h+='</div></div>';
+    });
+    h+='</div>';
+
+    // Embedding section
+    const emb=cfg.embedding||{};
+    h+='<div class="card"><h3>向量模型</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    h+=_settingRow('Provider','emb_provider',emb.provider||'',{type:'select',opts:providers});
+    h+=_settingRow('Model','emb_model',emb.model||'');
+    h+=_settingRow('Base URL','emb_base_url',emb.base_url||'');
+    h+=_settingRow('API Key','emb_api_key','',{type:'password',ph:emb.api_key_masked||'未设置'});
+    h+=_settingRow('Dimension','emb_dimension',String(emb.dimension||1024),{type:'number'});
+    h+='</div></div>';
+
+    // Parser section
+    const p=cfg.parser||{};
+    h+='<div class="card"><h3>PDF 解析</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    h+=_settingRow('MinerU API URL','parser_mineru_url',p.mineru_api_url||'');
+    h+=_settingRow('Timeout (s)','parser_timeout',String(p.mineru_api_timeout||1800),{type:'number'});
+    h+=_settingRow('Backend','parser_backend',p.mineru_api_backend||'pipeline',{type:'select',opts:['pipeline','vlm']});
+    h+=_settingRow('Return MD','parser_return_md',p.mineru_api_return_md||'true',{type:'select',opts:['true','false']});
+    h+='</div></div>';
+
+    // Segment section
+    const s=cfg.segment||{};
+    h+='<div class="card"><h3>分段参数</h3><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    h+=_settingRow('并发窗口数','seg_concurrency',String(s.max_concurrency||4),{type:'number'});
+    h+=_settingRow('Max Tokens','seg_max_tokens',String(s.segment_max_tokens||2000),{type:'number'});
+    h+=_settingRow('窗口大小(页)','seg_window',String(s.window_size||4),{type:'number'});
+    h+=_settingRow('重叠页数','seg_overlap',String(s.overlap_pages||2),{type:'number'});
+    h+='</div></div>';
+
+    h+='</div>';
+    h+='<div style="margin-top:16px"><button class="btn btn-primary" onclick="saveSettings()" style="padding:10px 32px;font-size:14px">保存设置</button> <span id="settings-status" style="margin-left:12px;font-size:13px"></span></div>';
+    m.innerHTML='<h2>设置</h2>'+h;
+  }catch(e){m.innerHTML='<h2>设置</h2><p style="color:var(--red)">加载失败: '+esc(e.message)+'</p>'}
+}
+
+function _settingRow(label, id, value, opts={}){
+  opts=opts||{};
+  let input;
+  if(opts.type==='select'){
+    input='<select id="'+id+'">'+opts.opts.map(o=>'<option value="'+o+'" '+(o===value?'selected':'')+'>'+o+'</option>').join('')+'</select>';
+  }else if(opts.type==='password'){
+    input='<input type="password" id="'+id+'" placeholder="'+(opts.ph||'')+'" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;font-family:var(--font);width:100%">';
+  }else if(opts.type==='number'){
+    input='<input type="number" id="'+id+'" value="'+value+'" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;font-family:var(--font);width:100%">';
+  }else{
+    input='<input type="text" id="'+id+'" value="'+esc(value)+'" style="background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px;font-family:var(--font);width:100%">';
+  }
+  return '<div><div style="font-size:11px;color:var(--fg3);margin-bottom:3px">'+label+'</div>'+input+'</div>';
+}
+
+async function saveSettings(){
+  const st=document.getElementById('settings-status');
+  st.style.color='var(--accent)';st.textContent='保存中...';
+  try{
+    const cfg={llm:{}};
+    const llmRoles=['extraction','segment','review','compilation','default'];
+    llmRoles.forEach(role=>{
+      cfg.llm[role]={};
+      ['provider','model','base_url','api_key'].forEach(f=>{
+        const el=document.getElementById('llm_'+role+'_'+f);
+        if(el&&el.value&&(f!=='api_key'||el.value)) cfg.llm[role][f]=el.value;
+      });
+    });
+    cfg.embedding={};
+    ['provider','model','base_url','api_key','dimension'].forEach(f=>{
+      const el=document.getElementById('emb_'+f);
+      if(el&&el.value) cfg.embedding[f]=f==='dimension'?parseInt(el.value):el.value;
+    });
+    cfg.parser={};
+    ['mineru_url','timeout','backend','return_md'].forEach(f=>{
+      const el=document.getElementById('parser_'+f);
+      if(el&&el.value) cfg.parser['mineru_api_'+f.replace('mineru_','')]=f==='timeout'?parseInt(el.value):el.value;
+    });
+    cfg.segment={};
+    ['concurrency','max_tokens','window','overlap'].forEach(f=>{
+      const el=document.getElementById('seg_'+f);
+      if(el&&el.value) cfg.segment[({concurrency:'max_concurrency',max_tokens:'segment_max_tokens',window:'window_size',overlap:'overlap_pages'})[f]]=parseInt(el.value);
+    });
+
+    const r=await fetch(API+'admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    const d=await r.json();
+    if(d.ok){st.style.color='var(--green)';st.textContent='✓ 已保存';toast('设置已保存',true)}
+    else{st.style.color='var(--red)';st.textContent='失败: '+esc(d.error||'')}
+  }catch(e){st.style.color='var(--red)';st.textContent='错误: '+esc(e.message)}
 }
 
 // ---- Init ----

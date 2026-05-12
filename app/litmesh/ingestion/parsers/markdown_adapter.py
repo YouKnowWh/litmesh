@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from ..parsed_document import (
@@ -126,7 +127,11 @@ class RemoteMarkdownAdapter:
             with source.open("rb") as f:
                 response = httpx.post(
                     endpoint,
-                    files={"file": (source.name, f, "application/pdf")},
+                    files={"files": (source.name, f, "application/pdf")},
+                    data={
+                        "backend": os.getenv("LITMESH_MINERU_API_BACKEND", "pipeline"),
+                        "return_md": os.getenv("LITMESH_MINERU_API_RETURN_MD", "true"),
+                    },
                     timeout=timeout,
                 )
             response.raise_for_status()
@@ -236,12 +241,134 @@ def _markdown_from_response(response) -> str:
     content_type = response.headers.get("content-type", "").lower()
     if "application/json" in content_type:
         data = response.json()
+        results = data.get("results")
+        if isinstance(results, dict):
+            for result in results.values():
+                if not isinstance(result, dict):
+                    continue
+                value = result.get("md_content")
+                if isinstance(value, str) and value.strip():
+                    return value
+                for key in ("markdown", "md", "content", "text"):
+                    nested = result.get(key)
+                    if isinstance(nested, str) and nested.strip():
+                        return nested
         for key in ("markdown", "md", "content", "text"):
             value = data.get(key)
-            if isinstance(value, str):
+            if isinstance(value, str) and value.strip():
                 return value
-        raise RuntimeError("Remote markdown API JSON has no markdown/md/content/text field")
+        raise RuntimeError(
+            "Remote markdown API JSON has no results.*.md_content or markdown/md/content/text field"
+        )
     return response.text
+
+
+# Pseudo-headings that should NOT become TOC entries
+_PSEUDO_HEADING_PATTERNS = re.compile(
+    r"^(问题探讨|讨论|本节聚焦|相关信息|材料用具|方法步骤|"
+    r"练习与应用|思考与讨论|探究与实践|知识链接|拓展视野|"
+    r"与社会的联系|学科交叉|科学方法|实验|"
+    r"[一二三四五六七八九十]+[、，．.]\s*.+"
+    r"|本节要点|内容提要|本章小结|自我检测|复习题)$"
+)
+
+
+def _is_pseudo_heading(title: str) -> bool:
+    """True if this heading is an activity/sidebar marker, not a structural chapter/section."""
+    return bool(_PSEUDO_HEADING_PATTERNS.match(title.strip()))
+
+
+def _build_outline_from_toc_blocks(
+    toc_blocks: list,
+    headings: list,
+    all_elements: list,
+    parser_name: str,
+) -> list:
+    """Parse TOC block text into real OutlineItems, anchored to heading elements.
+
+    Only creates OutlineItems for headings that appear in the TOC block,
+    using order_index for body_page (order-based anchoring).
+    Filters out pseudo-headings like "问题探讨", "讨论", etc.
+    """
+    from ..toc_extractor import parse_toc_line
+
+    # Merge TOC block text
+    toc_text = "\n".join(e.text for e in toc_blocks)
+
+    # Parse TOC lines into candidate entries
+    toc_entries = []
+    for line in toc_text.split("\n"):
+        line = line.strip()
+        if not line or len(line) < 4:
+            continue
+        entry = parse_toc_line(line, toc_page=1, idx=len(toc_entries) + 1)
+        if entry:
+            toc_entries.append(entry)
+
+    if not toc_entries:
+        return []
+
+    # Build a lookup of heading text -> element (for order_index anchoring)
+    # Only include structural headings (not context/decorative/noise)
+    from ...repair.heading_classifier import HeadingClassifier, HeadingRole
+    classifier = HeadingClassifier()
+
+    heading_by_normalized = {}
+    for h in headings:
+        role = classifier.classify(h.text, heading_level=h.level)
+        if role in (HeadingRole.CONTEXT_HEADING, HeadingRole.DECORATIVE, HeadingRole.NOISE):
+            continue
+        if role == HeadingRole.FRONT_MATTER:
+            continue
+        norm = _normalize_for_match(h.text)
+        heading_by_normalized[norm] = h
+
+    # Match TOC entries to heading elements
+    outline = []
+    last_body_order = 0
+    for i, entry in enumerate(toc_entries):
+        role = classifier.classify(entry.title, heading_level=entry.level)
+        if role in (HeadingRole.CONTEXT_HEADING, HeadingRole.DECORATIVE,
+                     HeadingRole.NOISE, HeadingRole.FRONT_MATTER):
+            continue
+        norm = _normalize_for_match(entry.title)
+        matched_heading = heading_by_normalized.get(norm)
+        if matched_heading is not None:
+            body_order = matched_heading.order_index
+            last_body_order = body_order
+        elif not (entry.printed_page or 0):
+            # Page-less TOC entries from markdown are only usable when we've
+            # already anchored the surrounding TOC region to a real body heading.
+            # In that case we attach them to the latest trusted body order
+            # instead of falling back to an early synthetic index that would
+            # incorrectly steal front-matter sections.
+            if last_body_order <= 0:
+                continue
+            body_order = last_body_order
+        else:
+            body_order = last_body_order or (i + 1)
+        resolved_title = matched_heading.text if matched_heading else entry.title
+        outline.append(OutlineItem(
+            title=resolved_title,
+            level=entry.level,
+            page=1,
+            body_page=body_order,  # order-based, not page-based
+            toc_page=1,
+            printed_page=entry.printed_page or entry.page,
+            element_id=matched_heading.element_id if matched_heading else "",
+            normalized_title=_normalize_for_match(resolved_title),
+            confidence=0.9 if matched_heading else 0.45,
+            source=parser_name,
+        ))
+    return outline
+
+
+def _normalize_for_match(text: str) -> str:
+    """Normalize title text for fuzzy matching between TOC and headings."""
+    import re as _re
+    t = _re.sub(r"\s+", "", text)
+    t = _re.sub(r"[\.\-·•·\s]", "", t)
+    return t
 
 
 def _document_from_markdown(
@@ -251,21 +378,36 @@ def _document_from_markdown(
     parser_name: str,
 ) -> ParsedDocument:
     elements = _elements_from_markdown(markdown)
-    outline = [
-        OutlineItem(
-            title=e.text,
-            level=max(1, e.level),
-            page=e.page_start,
-            body_page=e.page_start,
-            element_id=e.element_id,
-            confidence=e.confidence,
-            source=parser_name,
-        )
-        for e in elements
-        if e.type == ElementType.HEADING
-    ]
     paragraphs = [e for e in elements if e.type == ElementType.PARAGRAPH]
     headings = [e for e in elements if e.type == ElementType.HEADING]
+    toc_blocks = [e for e in elements if e.type == ElementType.TOC]
+
+    # Build outline from real TOC blocks when available, not from all headings
+    if toc_blocks:
+        outline = _build_outline_from_toc_blocks(
+            toc_blocks, headings, elements, parser_name
+        )
+    else:
+        # Fallback: use only structural headings, not every markdown heading.
+        from ...repair.heading_classifier import HeadingClassifier, HeadingRole
+        classifier = HeadingClassifier()
+        outline = [
+            OutlineItem(
+                title=e.text,
+                level=max(1, e.level),
+                page=e.page_start,
+                body_page=e.order_index or e.page_start,
+                element_id=e.element_id,
+                confidence=e.confidence,
+                source=parser_name,
+            )
+            for e in headings
+            if classifier.classify(
+                e.text,
+                heading_level=e.level,
+                context={"is_toc_region": False},
+            ) in {HeadingRole.STRUCTURAL_HEADING, HeadingRole.TOC_ENTRY}
+        ]
     avg_len = sum(len(e.text) for e in paragraphs) / max(len(paragraphs), 1)
     quality = QualityReport(
         parser_name=parser_name,
@@ -300,15 +442,21 @@ def _elements_from_markdown(markdown: str) -> list[ParsedElement]:
     paragraph_lines: list[str] = []
     order = 0
     current_heading = ""
+    toc_mode = False
 
     def flush_paragraph():
-        nonlocal order, paragraph_lines
+        nonlocal order, paragraph_lines, toc_mode
         text = _clean_text("\n".join(paragraph_lines))
         paragraph_lines = []
         if not text or _is_noise_line(text):
             return
         order += 1
-        is_toc = _is_toc_heading(current_heading) and _looks_like_toc_block(text)
+        looks_toc = _looks_like_toc_block(text)
+        is_toc = looks_toc and (
+            _is_toc_heading(current_heading)
+            or toc_mode
+            or _looks_like_front_toc_zone(elements)
+        )
         elements.append(ParsedElement(
             element_id=f"markdown_elem_{order}",
             type=ElementType.TOC if is_toc else ElementType.PARAGRAPH,
@@ -319,6 +467,8 @@ def _elements_from_markdown(markdown: str) -> list[ParsedElement]:
             confidence=0.9,
             role="toc" if is_toc else "body",
         ))
+        if is_toc:
+            toc_mode = True
 
     in_fence = False
     for raw_line in markdown.splitlines():
@@ -338,6 +488,11 @@ def _elements_from_markdown(markdown: str) -> list[ParsedElement]:
             text = _clean_text(heading.group(2))
             if text:
                 current_heading = text
+                if _is_toc_heading(text):
+                    toc_mode = True
+                elif toc_mode and _looks_like_structural_heading(text):
+                    # Leave TOC mode once we hit the first real chapter/section heading.
+                    toc_mode = False
                 order += 1
                 elements.append(ParsedElement(
                     element_id=f"markdown_elem_{order}",
@@ -390,6 +545,27 @@ def _is_noise_line(text: str) -> bool:
 def _is_toc_heading(text: str) -> bool:
     compact = re.sub(r"\s+", "", text)
     return compact in {"目录", "目錄"}
+
+
+def _looks_like_structural_heading(text: str) -> bool:
+    return bool(re.match(r"^第\s*[一二三四五六七八九十\d]+\s*[章节篇部节]", text.strip()))
+
+
+def _looks_like_front_toc_zone(elements: list[ParsedElement]) -> bool:
+    """Heuristic for markdown where TOC content is displaced from the TOC heading.
+
+    MinerU-style markdown sometimes emits:
+      ## 目录
+      ## 栏目标题
+      <actual toc paragraph lines>
+    so we still want to recover the TOC block while we're in the early document front matter.
+    """
+    if not elements:
+        return True
+    if len(elements) > 40:
+        return False
+    headings = [e for e in elements if e.type == ElementType.HEADING]
+    return any(_is_toc_heading(e.text) for e in headings[:8])
 
 
 def _looks_like_toc_block(text: str) -> bool:

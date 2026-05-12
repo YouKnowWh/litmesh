@@ -90,6 +90,8 @@ class LitMeshDB:
             "section_index": "INTEGER NOT NULL DEFAULT 0",
             "block_index": "INTEGER NOT NULL DEFAULT 0",
             "global_order_index": "INTEGER NOT NULL DEFAULT 0",
+            "toc_anchor_id": "TEXT",
+            "toc_anchor_title": "TEXT",
             "parser_name": "TEXT NOT NULL DEFAULT ''",
             "parser_element_id": "TEXT NOT NULL DEFAULT ''",
             "parser_confidence": "REAL NOT NULL DEFAULT 1.0",
@@ -180,27 +182,11 @@ class LitMeshDB:
         paper = self.get_paper(paper_id)
         graph_id = paper.get("graph_id", "") if paper else ""
 
-        tables = [
-            ("claim_blocks", "paper_id"),
-            ("evidence_blocks", "paper_id"),
-            ("limitation_blocks", "paper_id"),
-            ("section_blocks", "paper_id"),
-            ("source_spans", "paper_id"),
-            ("extraction_runs", "paper_id"),
-            ("extraction_run_items", "run_id IN (SELECT run_id FROM extraction_runs WHERE paper_id = ?)"),
-            ("parse_quality_reports", "paper_id"),
-            ("review_inbox", "paper_id"),
-        ]
-        total = 0
-        for tbl, where_clause in tables:
-            if "?" in where_clause:
-                cur = self.conn.execute(f"DELETE FROM {tbl} WHERE {where_clause}", (paper_id,))
-            else:
-                cur = self.conn.execute(f"DELETE FROM {tbl} WHERE {where_clause} = ?", (paper_id,))
-            total += cur.rowcount
+        total = self._clear_pipeline_data(paper_id, graph_id)
 
         # Delete paper itself
         self.conn.execute("DELETE FROM paper_cards WHERE paper_id = ?", (paper_id,))
+        total += 1
 
         # Clean up orphaned graph if no papers remain
         if graph_id:
@@ -218,6 +204,54 @@ class LitMeshDB:
         self.conn.commit()
         return total
 
+    def clear_pipeline_data(self, paper_id: str, graph_id: str = "") -> int:
+        """Delete all v0.1/v0.2 pipeline outputs for a paper, keeping the paper card.
+
+        Use before re-parsing to get fresh sections/claims/etc. with updated code.
+        Returns count of deleted rows.
+        """
+        total = self._clear_pipeline_data(paper_id, graph_id)
+        self.conn.commit()
+        return total
+
+    def _clear_pipeline_data(self, paper_id: str, graph_id: str) -> int:
+        """Internal: delete pipeline outputs without committing."""
+        # Delete relations that reference this paper's blocks via graph_relations
+        # (BELONGS_TO, PARENT, NEXT, SUPPORTS, CONSTRAINS, etc.)
+        tables: list[tuple[str, str]] = [
+            ("claim_blocks", "paper_id"),
+            ("evidence_blocks", "paper_id"),
+            ("limitation_blocks", "paper_id"),
+            ("section_blocks", "paper_id"),
+            ("outline_nodes", "paper_id"),
+            ("source_spans", "paper_id"),
+            ("extraction_runs", "paper_id"),
+            ("extraction_run_items",
+             "run_id IN (SELECT run_id FROM extraction_runs WHERE paper_id = ?)"),
+            ("parse_quality_reports", "paper_id"),
+            ("review_inbox", "paper_id"),
+        ]
+        total = 0
+        for tbl, where_clause in tables:
+            if "?" in where_clause:
+                cur = self.conn.execute(
+                    f"DELETE FROM {tbl} WHERE {where_clause}", (paper_id,)
+                )
+            else:
+                cur = self.conn.execute(
+                    f"DELETE FROM {tbl} WHERE {where_clause} = ?", (paper_id,)
+                )
+            total += cur.rowcount
+
+        # Delete graph_relations belonging to this graph (edges between sections/blocks)
+        if graph_id:
+            cur = self.conn.execute(
+                "DELETE FROM graph_relations WHERE graph_id = ?", (graph_id,)
+            )
+            total += cur.rowcount
+
+        return total
+
     # ---- SectionBlock ----
 
     def insert_section(self, section) -> str:
@@ -226,9 +260,10 @@ class LitMeshDB:
                heading_path, heading_level, heading_confidence, display_title, structure_status,
                chapter_index, section_index, block_index, global_order_index,
                raw_text, summary, page_start, page_end,
+               toc_anchor_id, toc_anchor_title,
                parser_name, parser_element_id, parser_confidence,
                concept_keys, parent_section_id, prev_section_id, next_section_id, content_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (section.section_id, section.graph_id, section.paper_id, section.heading,
              _json_list(section.heading_path), section.heading_level.value,
              section.heading_confidence, section.display_title or "",
@@ -236,6 +271,8 @@ class LitMeshDB:
              section.chapter_index, section.section_index, section.block_index,
              section.global_order_index,
              section.raw_text, section.summary, section.page_start, section.page_end,
+             getattr(section, "toc_anchor_id", None) or None,
+             getattr(section, "toc_anchor_title", None) or None,
              getattr(section, "parser_name", ""), getattr(section, "parser_element_id", ""),
              getattr(section, "parser_confidence", 1.0),
              _json_list(section.concept_keys), section.parent_section_id,
@@ -252,6 +289,43 @@ class LitMeshDB:
             (paper_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- DocumentOutlineNode ----
+
+    def insert_outline_nodes(self, nodes: list) -> int:
+        """Batch-insert outline nodes for a paper."""
+        count = 0
+        for n in nodes:
+            self.conn.execute(
+                """INSERT OR REPLACE INTO outline_nodes
+                   (outline_id, paper_id, graph_id, title, normalized_title,
+                    level, toc_page, printed_page, body_page,
+                    parent_outline_id, order_index, confidence, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (n.outline_id, n.paper_id, n.graph_id, n.title,
+                 n.normalized_title, n.level, n.toc_page, n.printed_page,
+                 n.body_page, n.parent_outline_id, n.order_index,
+                 n.confidence, n.source)
+            )
+            count += 1
+        self.conn.commit()
+        return count
+
+    def get_outline_tree(self, paper_id: str) -> list[dict]:
+        """Return the TOC tree for a paper, ordered by order_index."""
+        rows = self.conn.execute(
+            "SELECT * FROM outline_nodes WHERE paper_id = ? ORDER BY order_index",
+            (paper_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_outline_nodes(self, paper_id: str) -> int:
+        """Delete all outline nodes for a paper."""
+        cur = self.conn.execute(
+            "DELETE FROM outline_nodes WHERE paper_id = ?", (paper_id,)
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     def insert_parse_quality_report(self, paper_id: str, graph_id: str, report) -> str:
         """Persist parser quality diagnostics for audit and extraction gating."""

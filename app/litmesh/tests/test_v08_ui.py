@@ -14,6 +14,7 @@ from app.litmesh.storage.sqlite import LitMeshDB
 from app.litmesh.models.corpus import CorpusCard
 from app.litmesh.models.graph import SeriesGraph
 from app.litmesh.models.paper import PaperCard
+from app.litmesh.models.section import SectionBlock, HeadingLevel
 from app.litmesh.models.claim import ClaimBlock, ClaimStatus
 from app.litmesh.models.concept import ConceptKey, ConceptNamespace, ConceptStatus
 from app.litmesh.models.relation import BridgeRelation, BridgeRelationType, BridgeStatus
@@ -63,6 +64,37 @@ def _seed_data(db):
             "needs_structure_review": False,
         },
     )
+    db.conn.execute(
+        """INSERT INTO outline_nodes
+           (outline_id, paper_id, graph_id, title, normalized_title, level,
+            toc_page, printed_page, body_page, parent_outline_id, order_index, confidence, source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "ol_ui_ch1", p.paper_id, g.graph_id,
+            "第一章 测试章节", "第一章 测试章节", 1,
+            1, 1, 1, None, 1, 0.95, "toc_text",
+        ),
+    )
+
+    section = SectionBlock(
+        graph_id=g.graph_id,
+        paper_id=p.paper_id,
+        heading="第一章 测试章节",
+        heading_path=["第一章 测试章节"],
+        heading_level=HeadingLevel.CHAPTER,
+        display_title="这是第一段测试内容",
+        raw_text="这是第一段测试内容，用于 chapter_context 图视图回归。",
+        page_start=1,
+        page_end=1,
+        chapter_index=1,
+        section_index=1,
+        block_index=1,
+        global_order_index=1,
+        toc_anchor_id="ol_ui_ch1",
+        toc_anchor_title="第一章 测试章节",
+    )
+    db.insert_section(section)
+    db.conn.commit()
 
     span = SourceSpan(span_id="span_ui01", paper_id=p.paper_id,
                       span_type="paragraph", source_text="Test",
@@ -183,6 +215,22 @@ class TestUIEndpoints:
         r = client.get("/ui")
         assert r.status_code == 200
         assert "LitMesh 管理后台" in r.text
+
+    def test_graph_view_chapter_context(self, client):
+        graphs = client.get("/graphs")
+        graph_id = graphs.json()["graphs"][0]["graph_id"]
+        papers = client.get("/papers")
+        paper_id = papers.json()["papers"][0]["paper_id"]
+        r = client.get(
+            f"/graph-view?graph_id={graph_id}&mode=chapter_context&limit=50"
+            f"&paper_id={paper_id}"
+        )
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["mode"] == "chapter_context"
+        chapters = [n for n in payload["nodes"] if n["type"] == "chapter"]
+        assert chapters
+        assert any(n["type"] == "paragraph" for n in payload["nodes"])
 
     def test_evidence_list(self, client):
         r = client.get("/evidence")

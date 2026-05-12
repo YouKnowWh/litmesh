@@ -21,6 +21,8 @@
 ### 分段质量提升
 - **PDF 结构解析外包优先** — 新增 Markdown parser 适配层，`parser=auto` 优先尝试 `mineru_api → external_markdown/sidecar → pdfplumber`
 - **远端 MinerU API 接入** — 新增 `parser=mineru_api`，通过 `LITMESH_MINERU_API_URL` 上传 PDF，接收 `text/markdown` 或 `{"markdown": "..."}`，避免本机安装/运行重型解析器
+- **台式机 MinerU API 对接** — `RemoteMarkdownAdapter` 现兼容 `POST /file_parse` 的 `files=@pdf`、`backend=pipeline`、`return_md=true`，并优先读取返回 JSON 中的 `results.*.md_content`
+- **远端优先回归修正** — `parser=auto` 的测试现明确区分“已配置远端 MinerU API 时优先走 `mineru_api`”与“未配置时回退到 `external_markdown`”，避免旧测试继续误报 `pdfplumber`/sidecar 优先
 - **Markdown sidecar 接入** — 支持 `parser=markdown|external_markdown|mineru_markdown|marker_markdown`，可读取 PDF 同名 `.md` 或 `data/parsed_markdown/<stem>.md`
 - **MinerU sidecar 实测** — 本机旧环境位于 `/Users/alex/Projects/PDF拆分/.venvbrew311/bin/magic-pdf`，需设置 `MINERU_TOOLS_CONFIG_JSON=/Users/alex/Projects/PDF拆分/magic-pdf.json`；89 页小书 CPU 解析约 3 分钟，可产出 Markdown sidecar
 - **Markdown heading 顺序修复** — MinerU/Markdown 无真实页码时按元素顺序推进 heading，不再用 page=1 的 outline 区间覆盖所有段落
@@ -30,9 +32,16 @@
 - **目录/前言结构块保留** — 只有文本确实呈现目录/前言/编写说明特征时才保留为对应 SectionBlock；v0.2 抽取跳过这些保留块
 - **目录对齐审计** — 记录 toc_entry_count、toc_page_count、toc_alignment_confidence、toc_printed_page_offset、toc_unaligned_entries
 - **显示标题清理** — `display_title` 改为段落首句摘要，不再混入 `P001/C01-Sxx` 结构标签
+- **年份前缀保护** — `section_splitter` 的前置页码清洗不再误删 `1949 年`、`2007 年 1 月`、`21 世纪` 这类正文开头数字
 - **Parser 优先级修正** — auto 顺序收敛为外包 Markdown 优先，中文教材优先走成熟解析器输出，再 fallback 到完整页级文本 + LLM/规则分段
 - **Parser source-of-truth 收敛** — `parser=auto` 不再让 PyMuPDF 自动兜底；PyMuPDF 只保留显式 `parser=pymupdf_blocks` 诊断入口
 - **PyMuPDF 严格禁用门禁** — PyMuPDF 现在也读取 TOC 指标；若元素数明显低于页数/目录规模，标记 `pymupdf_too_sparse_vs_*`
+- **Reranker 依赖入镜像** — Docker 现安装 `transformers`，并从 PyTorch CPU wheel 源安装 `torch==2.7.0+cpu`，repair 层不再因为缺依赖而退化成“只记候选、不做打分”，同时避免误拉整套 CUDA 依赖
+- **dry_run 不再拉模型** — `RepairExecutor` 在默认 `dry_run` 观察模式下只记录候选，不再触发 reranker 初始化/下载，避免首次导入时卡住前端
+- **chapter_context 图接口兼容旧库** — 修复 `/graph-view?mode=chapter_context` 中将 `sqlite3.Row` 误当 dict 使用导致的 500；同时在数据库启动兼容迁移里补齐 `section_blocks.toc_anchor_id / toc_anchor_title`，旧库无需手工改表即可进入章节图模式
+- **Markdown 目录恢复加强** — `markdown_adapter` 现在能识别“目录 heading 被装饰性 heading 打断后才出现真实目录段”的教材场景；同时在无 TOC block 的 fallback 下，只把 `structural/toc` 级 heading 放入 outline，不再把 `问题探讨/讨论/本节聚焦` 一股脑当目录结构
+- **无页码目录项与脏 TOC 降噪** — `toc_extractor` 现支持解析 `第1章 ...` / `第1节 ...` 这类无页码目录行；但若正文里找不到对应 heading，则不会把这类残缺目录项写进 outline，避免它们错误抢占前置材料和章节锚点
+- **chapter_context 单书图自动走 TOC 骨架** — 仅传 `graph_id` 且图内只有一本书时，`/graph-view?mode=chapter_context` 会自动推断 `paper_id` 并优先使用 `outline_nodes`；同时 `chapter_index<=0` 的前言/目录/出版信息不会再被强行提升成伪章节
 - **Boundary-first bug 修复** — `_extract_text` 在 `end_quote` 缺失时不再触发 `orig_start` 未绑定错误
 - **Containment dedup** — 检测长段包含子段，保留长的拒收短的，计数入 `QualityReport.containment_duplicate_count`
 - **Role 分流** — LLM prompt 扩展类型枚举：body/heading/sidebar/activity/exercise/caption/table_text/toc/front_matter/header_footer/page_number/uncertain

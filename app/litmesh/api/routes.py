@@ -60,6 +60,19 @@ class ImportRequest(BaseModel):
 
 DATA_DIR = Path("data")
 
+
+def _parse_heading_path(raw) -> list[str]:
+    """Parse heading_path from DB (could be JSON string or already deserialized)."""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return []
+
+
 class InboxDecision(BaseModel):
     reason: str = ""
     new_confidence: Optional[float] = None
@@ -107,7 +120,7 @@ class InboxDecision(BaseModel):
 
 
 def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
-               embed_provider=None) -> FastAPI:
+               embed_provider=None, settings_manager=None) -> FastAPI:
     """Factory function to create the FastAPI app with LitMesh dependencies.
 
     Args:
@@ -115,6 +128,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
         llm_client: Single LLMClient (backward-compatible). Ignored if llm_clients given.
         llm_clients: MultiLLMClient with per-role clients (extraction/review/compilation/default).
         embed_provider: EmbeddingProvider for vector search.
+        settings_manager: SettingsManager for reading/writing runtime config.
     """
 
     if llm_clients is not None:
@@ -176,6 +190,50 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
         )
         result = pipeline.run_v0_1(req.pdf_path)
         return {"ok": True, **result}
+
+    @app.post("/papers/{paper_id}/reparse")
+    async def reparse_paper(
+        paper_id: str,
+        parser: str = Query("auto"),
+        segmenter: str = Query("auto"),
+    ):
+        """Re-parse an existing paper's PDF through the current v0.1 pipeline.
+
+        Clears old sections/blocks/relations, then re-runs parse + section splitting.
+        Keeps the paper card and graph. Does NOT re-run v0.2 extraction.
+        """
+        paper = db.get_paper(paper_id)
+        if not paper:
+            raise HTTPException(404, "Paper not found")
+
+        pdf_path = paper.get("source_file", "")
+        if not pdf_path:
+            raise HTTPException(400, "Paper has no source_file")
+
+        from pathlib import Path
+        full_path = Path("data") / pdf_path
+        if not full_path.exists():
+            # Try absolute path
+            full_path = Path(pdf_path)
+            if not full_path.exists():
+                raise HTTPException(404, f"PDF file not found: {pdf_path}")
+
+        graph_id = paper.get("graph_id", "")
+
+        # Clear old pipeline outputs, keep the paper card
+        db.clear_pipeline_data(paper_id, graph_id)
+
+        # Re-run v0.1 with the existing paper_id
+        pipeline = IngestionPipeline(
+            db,
+            llm_extraction,
+            graph_id,
+            parser_name=parser,
+            segmenter_name=segmenter,
+            segment_llm_client=llm_segment,
+        )
+        result = pipeline.run_v0_1(str(full_path), existing_paper_id=paper_id)
+        return {"ok": True, "reparsed": True, **result}
 
     @app.post("/papers/upload")
     async def upload_paper(
@@ -540,7 +598,253 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
         if paper_id:
             paper_params.append(paper_id)
 
-        if mode == "paragraph":
+        if mode == "chapter_context":
+            if not paper_id:
+                rows = db.conn.execute(
+                    "SELECT paper_id FROM paper_cards WHERE graph_id = ? ORDER BY created_at DESC LIMIT 2",
+                    (graph_id,),
+                ).fetchall()
+                if len(rows) == 1:
+                    paper_id = rows[0]["paper_id"]
+                    paper_filter = "AND paper_id = ?"
+                    paper_params = [graph_id, paper_id]
+
+            # TOC-driven three-layer graph: chapter → paragraph → argument
+            # Chapters come from outline_nodes table (persistent TOC tree)
+            toc_rows = db.conn.execute(
+                "SELECT * FROM outline_nodes WHERE paper_id = ? ORDER BY order_index",
+                (paper_id or "",)
+            ).fetchall() if paper_id else []
+
+            # If we have TOC data, use it as structural source of truth
+            if toc_rows:
+                chapters = []
+                toc_map = {}  # outline_id -> chapter node
+                for tr in toc_rows:
+                    if tr["level"] == 1:
+                        ch_id = f"toc_{tr['outline_id']}"
+                        toc_map[tr["outline_id"]] = ch_id
+                        chapters.append({
+                            "id": ch_id, "type": "chapter",
+                            "label": tr["title"][:60],
+                            "level": tr["level"],
+                            "order": tr["order_index"],
+                            "page": tr["body_page"] or tr["toc_page"] or 0,
+                            "confidence": tr["confidence"],
+                        })
+                    elif tr["level"] >= 2:
+                        # Sub-section: map to parent chapter
+                        parent_ch = toc_map.get(tr["parent_outline_id"])
+                        ch_id = f"toc_{tr['outline_id']}"
+                        if parent_ch:
+                            toc_map[tr["outline_id"]] = parent_ch
+
+                nodes = chapters + nodes
+
+                # Section blocks with toc_anchor_id binding
+                p_rows = db.conn.execute(
+                    f"SELECT section_id, heading, heading_path, display_title, "
+                    f"raw_text, page_start, page_end, toc_anchor_id, toc_anchor_title, "
+                    f"chapter_index, section_index, block_index, global_order_index "
+                    f"FROM section_blocks WHERE graph_id = ? {paper_filter} "
+                    f"ORDER BY global_order_index, page_start, section_id LIMIT ?",
+                    (*paper_params, limit)
+                ).fetchall()
+                stats["total_nodes"] = db.conn.execute(
+                    f"SELECT COUNT(*) FROM section_blocks WHERE graph_id = ? {paper_filter}", paper_params
+                ).fetchone()[0]
+
+                p_ids = set()
+                for r in p_rows:
+                    r = dict(r)
+                    p_ids.add(r["section_id"])
+                    if (r.get("chapter_index") or 0) <= 0 and not r.get("toc_anchor_id"):
+                        chapter_id = None
+                    else:
+                        chapter_id = None
+                    anchor = r.get("toc_anchor_id") or ""
+                    if anchor:
+                        chapter_id = toc_map.get(anchor)
+                    # Fallback: if no anchor, try to match by heading_path
+                    if not chapter_id and (r.get("chapter_index") or 0) > 0:
+                        hp = _parse_heading_path(r.get("heading_path"))
+                        if hp:
+                            for tr in toc_rows:
+                                if tr["title"] == hp[0] and tr["level"] == 1:
+                                    chapter_id = toc_map.get(tr["outline_id"])
+                                    break
+                    # Last fallback: use page proximity
+                    if not chapter_id and chapters and (r.get("chapter_index") or 0) > 0:
+                        page = r.get("page_start") or 0
+                        nearest = min(chapters, key=lambda c: abs((c.get("page") or 0) - page))
+                        chapter_id = nearest["id"]
+
+                    nodes.append({
+                        "id": r["section_id"], "type": "paragraph",
+                        "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:60],
+                        "fullText": (r["raw_text"] or ""),
+                        "page": r["page_start"] or 0,
+                        "chapter_id": chapter_id,
+                        "chapter_index": r["chapter_index"],
+                        "global_order_index": r["global_order_index"],
+                    })
+            else:
+                # No TOC data — fall back to heading_level heuristics (legacy)
+                p_rows = db.conn.execute(
+                    f"SELECT section_id, heading, heading_path, heading_level, display_title, "
+                    f"raw_text, page_start, page_end, paper_id, "
+                    f"chapter_index, section_index, block_index, global_order_index, "
+                    f"toc_anchor_id, toc_anchor_title "
+                    f"FROM section_blocks WHERE graph_id = ? {paper_filter} "
+                    f"ORDER BY global_order_index, page_start, section_id LIMIT ?",
+                    (*paper_params, limit)
+                ).fetchall()
+                stats["total_nodes"] = db.conn.execute(
+                    f"SELECT COUNT(*) FROM section_blocks WHERE graph_id = ? {paper_filter}", paper_params
+                ).fetchone()[0]
+
+                chapters = []
+                p_ids = set()
+                current_chapter_id = None
+                chapter_order = 0
+                for i, r in enumerate(p_rows):
+                    r = dict(r)
+                    p_ids.add(r["section_id"])
+                    if (r.get("chapter_index") or 0) <= 0:
+                        nodes.append({
+                            "id": r["section_id"], "type": "paragraph",
+                            "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:60],
+                            "fullText": (r["raw_text"] or ""),
+                            "page": r["page_start"] or 0,
+                            "chapter_id": None,
+                            "chapter_index": r["chapter_index"],
+                            "global_order_index": r["global_order_index"],
+                        })
+                        continue
+                    heading_path = _parse_heading_path(r.get("heading_path"))
+                    hlevel = (r.get("heading_level") or "")
+                    is_chapter = (
+                        hlevel in ("chapter", "title")
+                        or (heading_path and len(heading_path) == 1
+                            and hlevel not in ("subsection", "subsubsection", "paragraph_group"))
+                    )
+                    if is_chapter or (i == 0 and not chapters):
+                        chapter_order += 1
+                        ch_id = f"ch_{r['section_id']}"
+                        ch_label = (heading_path[0] if heading_path else r["heading"]) or f"第{chapter_order}章"
+                        chapters.append({
+                            "id": ch_id, "type": "chapter",
+                            "label": ch_label[:60],
+                            "order": chapter_order,
+                            "page": r["page_start"] or 0,
+                        })
+                        current_chapter_id = ch_id
+                    nodes.append({
+                        "id": r["section_id"], "type": "paragraph",
+                        "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:60],
+                        "fullText": (r["raw_text"] or ""),
+                        "page": r["page_start"] or 0,
+                        "chapter_id": current_chapter_id,
+                        "chapter_index": r["chapter_index"],
+                        "global_order_index": r["global_order_index"],
+                    })
+                nodes = chapters + nodes
+
+            # Front matter grouping (shared across both paths):
+            # collect paragraphs without a chapter into a synthetic "前置材料" node
+            orphaned = [n for n in nodes if n.get("type") == "paragraph" and not n.get("chapter_id")]
+            if orphaned:
+                fm_id = "fm_front_matter"
+                chapters_sorted = [n for n in nodes if n.get("type") == "chapter"]
+                nodes = [{
+                    "id": fm_id, "type": "chapter",
+                    "label": "前置材料", "order": 0, "page": 0,
+                    "front_matter": True,
+                }] + nodes
+                for n in orphaned:
+                    n["chapter_id"] = fm_id
+
+            # Edges: chapter_contains
+            for n in nodes:
+                if n["type"] == "paragraph" and n.get("chapter_id"):
+                    edges.append({
+                        "source": n["chapter_id"], "target": n["id"],
+                        "type": "chapter_contains", "confidence": 1.0,
+                    })
+
+            # section_next edges (within same chapter only)
+            para_nodes = [n for n in nodes if n["type"] == "paragraph"]
+            for i in range(len(para_nodes) - 1):
+                a, b = para_nodes[i], para_nodes[i + 1]
+                if a.get("chapter_id") == b.get("chapter_id"):
+                    edges.append({
+                        "source": a["id"], "target": b["id"],
+                        "type": "section_next", "confidence": 0.8,
+                    })
+
+            # Attach claims/evidence/limitations
+            if p_ids:
+                placeholders = ",".join("?" * len(p_ids))
+                for c in db.conn.execute(
+                    f"SELECT claim_id, section_id, claim_text, extraction_confidence "
+                    f"FROM claim_blocks WHERE section_id IN ({placeholders}) LIMIT {limit}",
+                    list(p_ids)
+                ).fetchall():
+                    nodes.append({
+                        "id": c["claim_id"], "type": "claim",
+                        "label": c["claim_text"][:50],
+                        "fullText": c["claim_text"],
+                        "confidence": c["extraction_confidence"],
+                    })
+                    edges.append({
+                        "source": c["section_id"], "target": c["claim_id"],
+                        "type": "belongs_to", "confidence": c["extraction_confidence"],
+                    })
+
+                for ev in db.conn.execute(
+                    f"SELECT evidence_id, section_id, evidence_text "
+                    f"FROM evidence_blocks WHERE section_id IN ({placeholders}) LIMIT {limit}",
+                    list(p_ids)
+                ).fetchall():
+                    nodes.append({
+                        "id": ev["evidence_id"], "type": "evidence",
+                        "label": ev["evidence_text"][:50],
+                        "fullText": ev["evidence_text"],
+                    })
+                    edges.append({
+                        "source": ev["section_id"], "target": ev["evidence_id"],
+                        "type": "belongs_to", "confidence": 0.7,
+                    })
+
+                for lim in db.conn.execute(
+                    f"SELECT limitation_id, section_id, limitation_text "
+                    f"FROM limitation_blocks WHERE section_id IN ({placeholders}) LIMIT {limit}",
+                    list(p_ids)
+                ).fetchall():
+                    nodes.append({
+                        "id": lim["limitation_id"], "type": "limitation",
+                        "label": lim["limitation_text"][:50],
+                        "fullText": lim["limitation_text"],
+                    })
+                    edges.append({
+                        "source": lim["section_id"], "target": lim["limitation_id"],
+                        "type": "belongs_to", "confidence": 0.7,
+                    })
+
+            # Cross-node relations filtered to visible args
+            arg_ids = {n["id"] for n in nodes if n["type"] in ("claim", "evidence", "limitation")}
+            for rel in db.conn.execute(
+                f"SELECT source_id, target_id, relation_type, confidence "
+                f"FROM graph_relations WHERE graph_id = ? LIMIT {limit * 2}",
+                (graph_id,)
+            ).fetchall():
+                if rel["source_id"] in arg_ids and rel["target_id"] in arg_ids:
+                    edges.append({
+                        "source": rel["source_id"], "target": rel["target_id"],
+                        "type": rel["relation_type"], "confidence": rel["confidence"],
+                    })
+
+        elif mode == "paragraph":
             # Paragraph nodes sorted by page/order
             p_rows = db.conn.execute(
                 f"SELECT section_id, heading, display_title, raw_text, page_start, page_end, paper_id, "
@@ -558,6 +862,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                 nodes.append({"id": r["section_id"], "type": "paragraph",
                               "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:80],
                               "text": (r["raw_text"] or "")[:200],
+                              "fullText": (r["raw_text"] or ""),
                               "page": r["page_start"] or 0, "order": i,
                               "paper_id": r["paper_id"],
                               "chapter_index": r["chapter_index"],
@@ -667,6 +972,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
                 nodes.append({"id": r["section_id"], "type": "paragraph",
                               "label": (r["display_title"] or r["heading"] or f"P{r['page_start']}")[:80],
                               "text": (r["raw_text"] or "")[:200],
+                              "fullText": (r["raw_text"] or ""),
                               "page": r["page_start"] or 0, "order": i,
                               "paper_id": r["paper_id"]})
             for i in range(len(p_rows) - 1):
@@ -691,7 +997,7 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
         ).fetchone()[0]
         stats["has_more"] = stats["returned_nodes"] < stats["total_nodes"]
 
-        return {"nodes": nodes, "edges": edges, "stats": stats}
+        return {"graph_id": graph_id, "mode": mode, "nodes": nodes, "edges": edges, "stats": stats}
 
     # ---- Connectivity report ----
 
@@ -1059,5 +1365,31 @@ def create_app(db, llm_client: Optional[LLMClient] = None, llm_clients=None,
         if not ui_file.exists():
             raise HTTPException(404, "UI not found")
         return HTMLResponse(ui_file.read_text(encoding="utf-8"))
+
+    # ---- Admin / Settings ----
+
+    @app.get("/admin/config")
+    async def get_admin_config():
+        """Return all settings with API keys masked."""
+        if settings_manager is None:
+            raise HTTPException(501, "Settings manager not configured")
+        return settings_manager.get_public()
+
+    @app.post("/admin/config")
+    async def post_admin_config(request: dict):
+        """Save settings and reload LLM clients."""
+        if settings_manager is None:
+            raise HTTPException(501, "Settings manager not configured")
+        try:
+            settings_manager.save(request)
+            # Reload LLM clients from new settings
+            new_clients = settings_manager.reload_llm_clients()
+            nonlocal llm_extraction, llm_segment, llm_review
+            llm_extraction = new_clients.extraction
+            llm_segment = new_clients.segment
+            llm_review = new_clients.review
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     return app

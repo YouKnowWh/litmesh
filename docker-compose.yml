@@ -37,6 +37,8 @@ services:
       # before local pdfplumber+LLM segmentation.
       - LITMESH_MINERU_API_URL=${LITMESH_MINERU_API_URL:-}
       - LITMESH_MINERU_API_TIMEOUT=${LITMESH_MINERU_API_TIMEOUT:-1800}
+      - LITMESH_MINERU_API_BACKEND=${LITMESH_MINERU_API_BACKEND:-pipeline}
+      - LITMESH_MINERU_API_RETURN_MD=${LITMESH_MINERU_API_RETURN_MD:-true}
       # Optional generic command template, e.g.
       # "magic-pdf -p {pdf} -o {output} -m auto"
       - LITMESH_MARKDOWN_COMMAND=${LITMESH_MARKDOWN_COMMAND:-}

@@ -10,7 +10,7 @@ Each subsystem can use a different LLM endpoint:
 
 Inspired by KokoroMemo's per-subsystem LLM config pattern.
 
-Environment variables for each role (role: EXTRACTION, SEGMENT, REVIEW, COMPILATION, DEFAULT):
+Environment variables for each role (role: EXTRACTION, SEGMENT, REVIEW, COMPILATION, REPAIR, DEFAULT):
   LITMESH_{ROLE}_PROVIDER   — provider name (anthropic, openai_compatible, gemini)
   LITMESH_{ROLE}_MODEL      — model name
   LITMESH_{ROLE}_BASE_URL   — API base URL
@@ -138,7 +138,7 @@ def load_all_endpoints() -> dict[str, LLMEndpoint]:
     Returns:
         Dict mapping role name (lowercase) to LLMEndpoint.
     """
-    roles = ["EXTRACTION", "SEGMENT", "REVIEW", "COMPILATION", "DEFAULT"]
+    roles = ["EXTRACTION", "SEGMENT", "REVIEW", "COMPILATION", "REPAIR", "DEFAULT"]
     return {role.lower(): load_endpoint(role) for role in roles}
 
 
@@ -183,6 +183,10 @@ class MultiLLMClient:
     @property
     def compilation(self) -> "LLMClient":
         return self._get("compilation")
+
+    @property
+    def repair(self) -> "LLMClient":
+        return self._get("repair")
 
     @property
     def default(self) -> "LLMClient":

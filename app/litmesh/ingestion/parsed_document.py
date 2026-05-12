@@ -62,6 +62,28 @@ class OutlineItem:
 
 
 @dataclass
+class DocumentOutlineNode:
+    """Persistent TOC tree node — the structural backbone of a document.
+
+    Unlike OutlineItem (parser intermediate), this is stored in the database
+    and referenced by SectionBlock.toc_anchor_id.
+    """
+    outline_id: str           # "ol_{uuid4 hex[:12]}"
+    paper_id: str
+    graph_id: str
+    title: str                # "第一章 社会主义革命：1949-1976"
+    normalized_title: str = ""
+    level: int = 1            # 1=章 2=节 3=小节
+    toc_page: int = 0         # Page where this entry appears in the TOC
+    printed_page: int = 0     # Page number printed in the TOC entry
+    body_page: int = 0        # Actual body page in the PDF
+    parent_outline_id: str = ""
+    order_index: int = 0
+    confidence: float = 0.0
+    source: str = ""          # "parser_outline" | "text_toc" | "heading_fallback"
+
+
+@dataclass
 class QualityReport:
     """Parser quality assessment."""
     parser_name: str = ""

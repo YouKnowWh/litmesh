@@ -23,6 +23,7 @@ logger = logging.getLogger("litmesh.toc")
 _TOC_TITLE_RE = re.compile(r"^\s*目\s*录\s*$")
 _DOT_ENTRY_RE = re.compile(r"^(?P<title>.+?)[\.\u2026·•]{2,}\s*(?P<page>\d{1,4})\s*$")
 _SPACE_ENTRY_RE = re.compile(r"^(?P<title>第\s*[一二三四五六七八九十\d]+\s*[章节].+?)\s+(?P<page>\d{1,4})\s*$")
+_NO_PAGE_ENTRY_RE = re.compile(r"^(?P<title>第\s*[一二三四五六七八九十\d]+\s*[章节]\s*.+?)[\.…·•]?\s*$")
 _CHAPTER_RE = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*章")
 _SECTION_RE = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*节")
 
@@ -190,12 +191,16 @@ def parse_toc_line(line: str, toc_page: int, idx: int = 1) -> OutlineItem | None
     if not raw:
         return None
     match = _DOT_ENTRY_RE.match(raw) or _SPACE_ENTRY_RE.match(raw)
+    no_page = False
+    if not match:
+        match = _NO_PAGE_ENTRY_RE.match(raw)
+        no_page = True
     if not match:
         return None
     title = clean_title(match.group("title"))
     if not title or not (_CHAPTER_RE.search(title) or _SECTION_RE.search(title)):
         return None
-    printed_page = int(match.group("page"))
+    printed_page = int(match.group("page")) if not no_page else 0
     return OutlineItem(
         title=title,
         level=infer_level(title),
@@ -220,8 +225,22 @@ def infer_level(title: str) -> int:
 
 def clean_title(title: str) -> str:
     title = title.replace("\u3000", " ")
+    # Strip trailing noise: dot-leaders, " .23", ". .23", "...23"
     title = re.sub(r"[\.\u2026·•]{2,}.*$", "", title)
+    title = re.sub(r"\s*[\.\u2026·•]+\s*\d{1,4}\s*$", "", title)
     title = re.sub(r"\s+", " ", title).strip()
+    title = re.sub(r"[\.\u2026·•\s]+$", "", title).strip()
+    # Normalize Chinese chapter/section spacing:
+    #   "第 1 章" → "第1章"
+    #   "第1章走近细胞" → "第1章 走近细胞"
+    title = re.sub(
+        r"第\s+([一二三四五六七八九十\d]+)\s*([章节篇部])",
+        r"第\1\2", title,
+    )
+    title = re.sub(
+        r"(第[一二三四五六七八九十\d]+[章节篇部])([^\s，,\.．。；;：:])",
+        r"\1 \2", title,
+    )
     return title
 
 

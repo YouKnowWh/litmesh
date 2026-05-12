@@ -1,4 +1,5 @@
 import sys
+import sqlite3
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -12,14 +13,25 @@ from app.litmesh.ingestion.parsed_document import (
 )
 from app.litmesh.ingestion import parsers
 from app.litmesh.ingestion.parsers import PARSER_PRIORITY, create_parser
-from app.litmesh.ingestion.parsers.markdown_adapter import ExternalMarkdownAdapter
-from app.litmesh.ingestion.parsers.markdown_adapter import MarkdownAdapter
-from app.litmesh.ingestion.section_splitter import split_parsed_document
+from app.litmesh.ingestion.parsers.markdown_adapter import (
+    ExternalMarkdownAdapter,
+    MarkdownAdapter,
+    RemoteMarkdownAdapter,
+    _markdown_from_response,
+)
+from app.litmesh.ingestion.section_splitter import split_parsed_document, _strip_page_number
 from app.litmesh.ingestion.toc_extractor import TOCExtractor, parse_toc_line
+from app.litmesh.storage.sqlite import LitMeshDB
 
 
-def test_auto_parser_uses_pdfplumber_as_source_of_truth():
+def test_auto_parser_prefers_remote_markdown_when_configured(monkeypatch):
+    monkeypatch.setenv("LITMESH_MINERU_API_URL", "https://example.com/file_parse")
     assert PARSER_PRIORITY == ["mineru_api", "external_markdown", "pdfplumber"]
+    assert isinstance(create_parser("auto"), RemoteMarkdownAdapter)
+
+
+def test_auto_parser_falls_back_to_external_markdown_without_remote_config(monkeypatch):
+    monkeypatch.delenv("LITMESH_MINERU_API_URL", raising=False)
     assert isinstance(create_parser("auto"), ExternalMarkdownAdapter)
 
 
@@ -39,6 +51,115 @@ def test_markdown_adapter_builds_heading_and_paragraph_elements(tmp_path):
     assert [item.title for item in parsed.outline] == ["第一章 细胞", "第一节 细胞结构"]
 
 
+def test_markdown_adapter_recovers_toc_when_decorative_heading_interrupts(tmp_path):
+    md = tmp_path / "book.md"
+    md.write_text(
+        "# 生物学\n\n"
+        "# 必修 2\n\n"
+        "## 目 录\n\n"
+        "## 科学家访谈 毕生追求的“禾下乘凉梦”与袁隆平院士一席谈\n\n"
+        "第1章 遗传因子的发现 ........ 1\n"
+        "第1节 孟德尔的豌豆杂交实验（一） ........ 3\n\n"
+        "# 第1章 遗传因子的发现\n\n"
+        "正文开始。\n\n"
+        "## 第1节 孟德尔的豌豆杂交实验（一）\n\n"
+        "更多正文。\n",
+        encoding="utf-8",
+    )
+    parsed = MarkdownAdapter().parse(str(md))
+    toc_blocks = [e for e in parsed.elements if e.type == ElementType.TOC]
+    assert toc_blocks
+    titles = [item.title for item in parsed.outline]
+    assert "第1章 遗传因子的发现" in titles
+    assert "第1节 孟德尔的豌豆杂交实验（一）" in titles
+    assert "问题探讨" not in titles
+
+
+def test_markdown_outline_fallback_keeps_structural_headings_only(tmp_path):
+    md = tmp_path / "book.md"
+    md.write_text(
+        "# 第1章 遗传因子的发现\n\n"
+        "正文。\n\n"
+        "## 问题探讨\n\n"
+        "问题探讨内容。\n\n"
+        "## 讨论\n\n"
+        "讨论内容。\n\n"
+        "## 第1节 孟德尔的豌豆杂交实验（一）\n\n"
+        "更多正文。\n",
+        encoding="utf-8",
+    )
+    parsed = MarkdownAdapter().parse(str(md))
+    titles = [item.title for item in parsed.outline]
+    assert titles == ["第1章 遗传因子的发现", "第1节 孟德尔的豌豆杂交实验（一）"]
+
+
+def test_markdown_adapter_toc_can_parse_page_less_entries(tmp_path):
+    md = tmp_path / "book.md"
+    md.write_text(
+        "## 目录\n\n"
+        "第1章 走近细胞.\n"
+        "第1节 细胞是生命活动的基本单位.\n"
+        "第2章 组成细胞的分子. 15\n\n"
+        "# 第1章 走近细胞\n\n"
+        "正文。\n",
+        encoding="utf-8",
+    )
+    parsed = MarkdownAdapter().parse(str(md))
+    titles = [item.title for item in parsed.outline]
+    assert "第1章 走近细胞" in titles
+    assert "第1节 细胞是生命活动的基本单位" in titles
+    assert "第2章 组成细胞的分子" in titles
+
+
+def test_markdown_adapter_skips_page_less_toc_entries_without_body_match(tmp_path):
+    md = tmp_path / "book.md"
+    md.write_text(
+        "## 目录\n\n"
+        "第3节 细胞中的糖类和脂质. .23\n"
+        "第1章 走近细胞 ........ 1\n\n"
+        "# 第1章 走近细胞\n\n"
+        "正文。\n",
+        encoding="utf-8",
+    )
+    parsed = MarkdownAdapter().parse(str(md))
+    titles = [item.title for item in parsed.outline]
+    assert "第1章 走近细胞" in titles
+    assert "第3节 细胞中的糖类和脂质. .23" not in titles
+
+
+def test_markdown_adapter_prefers_matched_body_heading_title(tmp_path):
+    md = tmp_path / "book.md"
+    md.write_text(
+        "## 目录\n\n"
+        "第3节 细胞中的糖类和脂质. .23\n\n"
+        "# 第3节 细胞中的糖类和脂质\n\n"
+        "正文。\n",
+        encoding="utf-8",
+    )
+    parsed = MarkdownAdapter().parse(str(md))
+    titles = [item.title for item in parsed.outline]
+    assert "第3节 细胞中的糖类和脂质" in titles
+    assert "第3节 细胞中的糖类和脂质. .23" not in titles
+
+
+def test_remote_markdown_response_reads_results_md_content():
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json():
+            return {
+                "results": {
+                    "book.pdf": {
+                        "md_content": "# 第一章\n\n正文内容"
+                    }
+                }
+            }
+
+    markdown = _markdown_from_response(FakeResponse())
+    assert markdown == "# 第一章\n\n正文内容"
+
+
 def test_auto_parser_does_not_replace_pdfplumber_with_sparse_pymupdf(monkeypatch):
     assert "pymupdf_blocks" not in parsers.PARSER_PRIORITY
 
@@ -49,6 +170,20 @@ def test_parse_toc_line_with_dot_leaders():
     assert item.title == "第1章 走近细胞"
     assert item.level == 1
     assert item.printed_page == 1
+
+
+def test_parse_toc_line_without_page_number():
+    item = parse_toc_line("第1章 走近细胞.", toc_page=4)
+    assert item is not None
+    assert item.title == "第1章 走近细胞"
+    assert item.level == 1
+    assert item.printed_page == 0
+
+
+def test_parse_toc_line_strips_trailing_dot_page_noise():
+    item = parse_toc_line("第3节 细胞中的糖类和脂质. .23", toc_page=4)
+    assert item is not None
+    assert item.title == "第3节 细胞中的糖类和脂质"
 
 
 def test_toc_extractor_aligns_printed_page_offset():
@@ -203,3 +338,71 @@ def test_false_positive_toc_role_is_not_reserved_without_toc_text():
     )
     sections = split_parsed_document(parsed, "paper_bad_toc", "graph_toc")
     assert len(sections) == 0
+
+
+def test_strip_page_number_preserves_year_prefixes():
+    assert _strip_page_number("2007 年 1 月，印度共产党召开会议。").startswith("2007 年 1 月")
+    assert _strip_page_number("1949 年，中国新民主主义革命胜利后。").startswith("1949 年")
+    assert _strip_page_number("21 世纪以来，研究不断推进。").startswith("21 世纪以来")
+
+
+def test_split_parsed_document_preserves_leading_year_in_raw_text():
+    parsed = ParsedDocument(
+        pages=[{"page_num": 1, "text": "1949 年，中国新民主主义革命胜利后。"}],
+        parser_name="mineru_api",
+        elements=[
+            ParsedElement(
+                element_id="p1",
+                type=ElementType.PARAGRAPH,
+                text="1949 年，中国新民主主义革命胜利后，中国共产党在毛泽东的领导下开始建设新中国。",
+                page_start=1,
+                order_index=1,
+                confidence=0.95,
+                role="body",
+            )
+        ],
+    )
+    sections = split_parsed_document(parsed, "paper_year", "graph_year")
+    assert len(sections) == 1
+    assert sections[0].raw_text.startswith("1949 年，中国新民主主义革命胜利后")
+
+
+def test_init_schema_adds_toc_anchor_columns_for_legacy_db(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE section_blocks (
+            section_id TEXT PRIMARY KEY,
+            graph_id TEXT NOT NULL,
+            paper_id TEXT NOT NULL,
+            heading TEXT NOT NULL DEFAULT '',
+            heading_path TEXT NOT NULL DEFAULT '[]',
+            heading_level TEXT NOT NULL DEFAULT 'section',
+            raw_text TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            page_start INTEGER,
+            page_end INTEGER,
+            concept_keys TEXT NOT NULL DEFAULT '[]',
+            parent_section_id TEXT,
+            prev_section_id TEXT,
+            next_section_id TEXT,
+            content_hash TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = LitMeshDB(str(db_path))
+    db.connect()
+    db.init_schema()
+    cols = {
+        row["name"] for row in db.conn.execute("PRAGMA table_info(section_blocks)").fetchall()
+    }
+    db.close()
+
+    assert "toc_anchor_id" in cols
+    assert "toc_anchor_title" in cols
